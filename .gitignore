@@ -1,0 +1,5 @@
+/target
+/slatedb_nbd/target
+/tokio-nbd/target
+.env
+.envrc
