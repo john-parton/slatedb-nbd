@@ -5,8 +5,6 @@ edition = "2024"
 
 [dependencies]
 object_store = { version = "0.12.3", features = ["aws", "fs"] }
-serde = "1.0.219"
-serde_json = "1.0.141"
 slatedb = "0.7.0"
 thiserror = "2.0.12"
 tokio = "1.47.0"
