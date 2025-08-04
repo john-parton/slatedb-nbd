@@ -2580,7 +2580,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-nbd"
-version = "0.2.1"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a917f111985b88fb9f8f1cbee11c3d1787e613c3529e95c3e0bc300fbd6b1b68"
 dependencies = [
  "bitflags 2.9.1",
  "futures",
