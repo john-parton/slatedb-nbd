@@ -767,6 +767,17 @@ def main():
                 # Run the sync operation
                 subprocess.run(["sudo", "sync"], check=True)
 
+        # Show space usage in S3 bucket
+        logger.info("Checking space usage in S3 bucket:")
+        mcli = subprocess.run(
+            ["mcli", "du", "truenas/zerofs"],
+            stdout=subprocess.PIPE,
+            check=True,
+            encoding="utf-8",
+        )
+        print("Space usage:")
+        print(mcli.stdout, end="")
+
     return
 
     for test in TESTS:
