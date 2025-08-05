@@ -301,7 +301,7 @@ impl NbdDriver for SlateDbDriver {
 
     async fn disconnect(&self, _flags: CommandFlags) -> Result<(), ProtocolError> {
         self.db
-            .flush()
+            .close()
             .await
             .map_err(slate_db_error_to_protocol_error)
     }

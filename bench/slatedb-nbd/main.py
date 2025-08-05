@@ -1,5 +1,7 @@
+import argparse
 from contextlib import ExitStack, contextmanager
 
+import itertools as it
 import re
 import json
 import logging
@@ -10,6 +12,7 @@ import subprocess
 import sys
 import time
 from typing import Iterator, NotRequired, TypedDict
+from unittest import TestCase
 
 
 logger = logging.getLogger(__name__)
@@ -50,6 +53,7 @@ def temporary_nbd_device(
     block_size: int | None = None,
     device_index: int = 7,
     automatically_disconnect: bool = True,
+    connections: int | None = None,
 ) -> Iterator[str]:
     """
     Context manager to create a temporary NBD device.
@@ -83,6 +87,9 @@ def temporary_nbd_device(
 
     if block_size is not None:
         options.append(f"-b{block_size}")
+
+    if connections is not None:
+        options.append(f"-c{connections}")
 
     logger.debug(f"Connecting NBD device {device} on port {port}...")
     subprocess.run(
@@ -556,6 +563,121 @@ def bench_snapshot(dataset: str) -> None:
     logger.info("ZFS snapshot created successfully.")
 
 
+def bench_postgres(mountpoint: str, *, postgres_version: str = "17.5") -> None:
+    """
+    Benchmarks PostgreSQL operations.
+    This is a placeholder for the actual benchmarking logic.
+    """
+    # Start a docker container with the mountpoint as its data volume
+
+    logger.info("Pulling PostgreSQL Docker image...")
+    subprocess.run(
+        ["docker", "pull", f"postgres:{postgres_version}"],
+        check=True,
+    )
+
+    # Remove a container if it exists
+    subprocess.run(
+        ["docker", "rm", "postgres_init"],
+        check=False,
+    )
+
+    with bench("postgres_container_initialization"):
+        logger.info("Initializing PostgreSQL test container...")
+        subprocess.run(
+            [
+                "docker",
+                "run",
+                "--name",
+                "postgres_init",
+                "-e",
+                "POSTGRES_PASSWORD=secret",
+                "-v",
+                f"{mountpoint}/postgres:/var/lib/postgresql/data",
+                f"postgres:{postgres_version}",
+                # This is actually not valid. It will cause the container to exit after initialization
+                "-c",
+                "exit 0",
+            ],
+            check=False,
+        )
+
+    # Remove the container after initialization
+    subprocess.run(
+        ["docker", "rm", "postgres_serve"],
+        check=True,
+    )
+
+    # Start the container listening on port 5434
+    logger.info("Starting PostgreSQL test container...")
+    docker = subprocess.Popen(
+        [
+            "docker",
+            "run",
+            "--name",
+            "postgres_serve",
+            "-e",
+            "POSTGRES_PASSWORD=secret",
+            "-p",
+            "5434:5432",
+            "-v",
+            f"{mountpoint}/postgres:/var/lib/postgresql/data",
+            f"postgres:{postgres_version}",
+        ]
+    )
+
+    # Wait for PostgreSQL to start
+    logger.info("Waiting for PostgreSQL to start...")
+    time.sleep(10)
+
+    # Init test database
+    with bench("pgbench_initialization"):
+        subprocess.run(
+            [
+                "pgbench",
+                "-U",
+                "postgres",
+                "-h",
+                "localhost",
+                "-p",
+                "5434",
+                "-i",
+                "postgres",
+            ],
+            check=True,
+        )
+
+    with bench("pgbench_run"):
+        pgbench = subprocess.run(
+            [
+                "pgbench",
+                "-U",
+                "postgres",
+                "-h",
+                "localhost",
+                "-p",
+                "5434",
+                "-i",
+                "postgres",
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            encoding="utf-8",
+        )
+
+        print("STDOUT")
+        print(pgbench.stdout)
+        print("STDERR")
+        print(pgbench.stderr)
+
+    # Stop the PostgreSQL container
+    logger.info("Stopping PostgreSQL container...")
+    subprocess.run(["docker", "stop", "postgres_serve"], check=True)
+    # Wait for the container to stop
+    docker.wait()
+
+
 @contextmanager
 def setup_plan9():
     # Make directory
@@ -603,98 +725,133 @@ class _TestConfig(TypedDict):
         int | None
     ]  # Really only a small number of values are appropriate
     slog_size: NotRequired[int | None]  # Only used for SlateDB NBD tests
+    connection: NotRequired[int | None]  # Number of connections to use for NBD
 
 
-TESTS: list[_TestConfig] = [
-    {
-        "driver": "zerofs",
-        "compression": None,
+DRIVER_DEFAULTS = {
+    "zerofs": {
         "encryption": False,
     },
-    {
-        "driver": "zerofs",
-        "compression": "zstd",
-        "encryption": False,
-        "ashift": 12,
-        "block_size": 4096,
-    },
-    {
-        "driver": "zerofs",
-        "compression": "zstd",
-        "encryption": False,
-        "ashift": 12,
-        "block_size": 4096,
-    },
-    {
-        "driver": "slatedb-nbd",
-        "compression": "zstd-fast",
+    "slatedb-nbd": {
         "encryption": True,
         "ashift": 12,
         "block_size": 4096,
     },
-    {
-        "driver": "slatedb-nbd",
-        # zstd is equivalent to zstd-3
-        "compression": "zstd",
-        "encryption": True,
-        "ashift": 12,
-        "block_size": 4096,
-    },
-    # zstd-9 didn't perform great, but it's here
-    # if you want to run it.
-    # {
-    #     "driver": "slatedb-nbd",
-    #     "compression": "zstd-9",
-    #     "encryption": True,
-    #     "ashift": 12,
-    #     "block_size": 4096,
-    # },
-]
+}
+
+parser = argparse.ArgumentParser(
+    description="Run benchmarks for SlateDB NBD and ZeroFS with various configurations."
+)
 
 
-def main():
-    with ExitStack() as stack:
-        print("=" * 40)
-        print("Starting new test run.")
-        print("Zerofs/Plan 9 baseline test.")
-        empty_bucket("truenas/zerofs")
+def add_arguments(parser: argparse.ArgumentParser) -> None:
+    """
+    Add command line arguments to the parser.
+    """
+    parser.add_argument(
+        "--bench-plan-9",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    parser.add_argument(
+        "--drivers",
+        nargs="+",
+        choices=["slatedb-nbd", "zerofs"],
+        default=["slatedb-nbd", "zerofs"],
+        help="Specify which drivers to run benchmarks for. Default is both.",
+    )
+    parser.add_argument(
+        "--compression",
+        nargs="+",
+        choices=["off", "zstd-fast", "zstd"],
+        default=["off", "zstd-fast", "zstd"],
+        help="Specify the compression algorithms to use. Default is off, zstd-fast, zstd.",
+    )
+    parser.add_argument(
+        "--connections",
+        nargs="+",
+        type=int,
+        default=[1, 4, 8],
+        help="Specify the number of connections to use for benchmarks. Default is 1, 4, 8.",
+    )
 
-        # Set the current working directory to the script's directory
-        stack.enter_context(push_pop_cwd(os.path.dirname(__file__)))
 
-        # ZeroFS for plan 9
-        stack.enter_context(zerofs_background())
+add_arguments(parser)
 
-        # Plan 9
-        stack.enter_context(setup_plan9())
 
-        with bench("overall_test_duration"):
-            # Run the Linux kernel source extraction benchmark
-            bench_linux_kernel_source_extraction()
+def get_text_matrix(
+    *,
+    drivers: list[str],
+    compression: list[str],
+    connections: list[int],
+) -> Iterator[_TestConfig]:
+    conf = it.product(
+        drivers,
+        compression,
+        connections,
+    )
 
-            bench_recursive_delete()
+    for case_driver, case_compression, case_connections in conf:
+        yield {
+            "driver": case_driver,
+            "compression": None if case_compression == "off" else case_compression,
+            "connections": case_connections,
+            **DRIVER_DEFAULTS.get(case_driver, {}),
+        }
 
-            # This fails on Plan 9, so skip it for now.
-            # bench_sparse()
 
-            bench_write_big_zeroes()
+def cli():
+    """Main CLI function to run the benchmarks."""
 
-            with bench("sync"):
-                # Run the sync operation
-                subprocess.run(["sudo", "sync"], check=True)
+    args = parser.parse_args()
 
-        # Show space usage in S3 bucket
-        logger.info("Checking space usage in S3 bucket:")
-        mcli = subprocess.run(
-            ["mcli", "du", "truenas/zerofs"],
-            stdout=subprocess.PIPE,
-            check=True,
-            encoding="utf-8",
-        )
-        print("Space usage:")
-        print(mcli.stdout, end="")
+    if args.bench_plan_9:
+        with ExitStack() as stack:
+            print("=" * 40)
+            print("Starting new test run.")
+            print("Zerofs/Plan 9 baseline test.")
+            empty_bucket("truenas/zerofs")
 
-    for test in TESTS:
+            # Set the current working directory to the script's directory
+            stack.enter_context(push_pop_cwd(os.path.dirname(__file__)))
+
+            # ZeroFS for plan 9
+            stack.enter_context(zerofs_background())
+
+            # Plan 9
+            stack.enter_context(setup_plan9())
+
+            with bench("overall_test_duration"):
+                # Run the Linux kernel source extraction benchmark
+                bench_linux_kernel_source_extraction()
+
+                bench_recursive_delete()
+
+                # This fails on Plan 9, so skip it for now.
+                # bench_sparse()
+
+                bench_write_big_zeroes()
+
+                with bench("sync"):
+                    # Run the sync operation
+                    subprocess.run(["sudo", "sync"], check=True)
+
+            # Show space usage in S3 bucket
+            logger.info("Checking space usage in S3 bucket:")
+            mcli = subprocess.run(
+                ["mcli", "du", "truenas/zerofs"],
+                stdout=subprocess.PIPE,
+                check=True,
+                encoding="utf-8",
+            )
+            print("Space usage:")
+            print(mcli.stdout, end="")
+
+    for test in get_text_matrix(
+        drivers=args.drivers,
+        compression=args.compression,
+        connections=args.connections,
+    ):
         print("=" * 40)
         print("Starting new test run.")
         print(json.dumps(test, indent=2))
@@ -734,6 +891,11 @@ def main():
             )
 
             with bench("overall_test_duration"):
+                bench_postgres(
+                    mountpoint=f"/mnt/{dataset}",
+                )
+                break
+
                 # Run the Linux kernel source extraction benchmark
                 bench_linux_kernel_source_extraction()
 
@@ -765,4 +927,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    cli()

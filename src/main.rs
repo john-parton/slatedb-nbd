@@ -5,7 +5,7 @@ mod driver_slatedb;
 use crate::driver_slatedb::SlateDbDriver;
 use object_store::ObjectStore;
 use object_store::aws::S3ConditionalPut;
-use slatedb::Db;
+use slatedb::{Db, Settings};
 use std::env;
 use std::sync::Arc;
 use tokio_nbd::server::NbdServer;
