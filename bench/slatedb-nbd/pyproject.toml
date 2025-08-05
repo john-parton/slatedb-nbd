@@ -1,0 +1,7 @@
+[project]
+name = "slatedb-nbd-bench"
+version = "0.1.0"
+description = "Benchmarking tool for SlateDB NBD projects"
+readme = "README.md"
+requires-python = ">=3.12.3"
+dependencies = []
