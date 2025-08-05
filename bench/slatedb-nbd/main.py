@@ -1,6 +1,5 @@
 from contextlib import ExitStack, contextmanager
 
-from math import log
 import re
 import json
 import logging
@@ -229,6 +228,95 @@ def temporary_zfs_dataset(
         time.sleep(2)
         # Spit out anything that's still using the mountpoint
         subprocess.run(["lsof", "+D", mountpoint], check=False)
+
+
+@contextmanager
+def zerofs_plan9(*, automatically_kill: bool = True) -> Iterator[subprocess.Popen]:
+    """
+    Context manager to run ZeroFS in the background.
+    The process is started at the start and killed at the end.
+    """
+
+    # Check if a process is already running
+    existing_process = subprocess.run(
+        ["pgrep", "-f", "^target/release/zerofs$"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        encoding="utf-8",
+        check=False,
+    )
+
+    if existing_process.stdout.splitlines():
+        if automatically_kill:
+            logger.warning("ZeroFS is already running. Killing existing process...")
+            # Kill the existing process
+            subprocess.run(["pkill", "-f", "^target/release/zerofs$"], check=True)
+        else:
+            logger.error("ZeroFS is already running.")
+            raise RuntimeError(
+                "ZeroFS is already running. Please stop it before starting a new instance."
+            )
+
+    cwd = os.getcwd()
+
+    os.chdir("/tmp")
+
+    # Check if 'ZeroFS' directory exists
+    if not os.path.exists("ZeroFS"):
+        logger.debug("Cloning ZeroFS repository...")
+        subprocess.run(["git", "clone", "git@github.com:Barre/ZeroFS.git", "ZeroFS"])
+        os.chdir("ZeroFS")
+    else:
+        os.chdir("ZeroFS")
+        logger.debug("Pulling latest changes for ZeroFS repository...")
+        subprocess.run(["git", "pull"], check=True)
+
+    # Build ZeroFS in release mode
+    logger.debug("Building ZeroFS in release mode...")
+    subprocess.run(
+        ["cargo", "build", "--profile", "release"],
+        check=True,
+    )
+
+    zerofs_env = os.environ.copy()
+    zerofs_env["AWS_ALLOW_HTTP"] = "true"
+    zerofs_env["SLATEDB_CACHE_DIR"] = "/tmp/zerofs-cache"
+    zerofs_env["SLATEDB_CACHE_SIZE_GB"] = "2"
+    zerofs_env["ZEROFS_ENCRYPTION_PASSWORD"] = "secret"
+
+    # Start ZeroFS in the background, should be relatively quick because
+    # we built it above
+    logger.debug("Starting ZeroFS in the background...")
+    process = subprocess.Popen(
+        [
+            "cargo",
+            "run",
+            "--profile",
+            "release",
+            "--",
+            "s3://zerofs",
+        ],
+        env=zerofs_env,
+        stderr=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+    )
+
+    # Restore previous working directory
+    os.chdir(cwd)
+
+    try:
+        # Wait a bit for it to start
+        logger.debug("Waiting for ZeroFS to start...")
+        time.sleep(5)
+        logger.debug("ZeroFS started successfully.")
+        yield process  # Yield control to the block of code using this context manager
+    finally:
+        logger.debug("Stopping ZeroFS...")
+        # Kill the ZeroFS process
+        process.terminate()
+        logger.debug("Waiting for ZeroFS to stop...")
+        process.wait()
+        logger.debug("ZeroFS stopped.")
 
 
 @contextmanager
@@ -557,6 +645,44 @@ def bench_snapshot(dataset: str) -> None:
     logger.info("ZFS snapshot created successfully.")
 
 
+@contextmanager
+def setup_plan9():
+    # Make directory
+    subprocess.run(
+        ["sudo", "mkdir", "-p", "/mnt/zerofs_tmp2_p9"],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "sudo",
+            "mount",
+            "-t",
+            "9p",
+            "-o",
+            "trans=tcp,port=5564,version=9p2000.L,msize=1048576,cache=mmap,access=user",
+            "127.0.0.1",
+            "/mnt/zerofs_tmp2_p9",
+        ],
+        check=True,
+    )
+    mount = subprocess.run(
+        ["mount"], check=True, stdout=subprocess.PIPE, encoding="utf-8"
+    )
+    print(mount.stdout)
+
+    os.chdir("/mnt/zerofs_tmp2_p9")
+
+    try:
+        yield  # Yield control to the block of code using this context manager
+    finally:
+        os.chdir("/")  # Change the working directory back to root
+        # Unmount the directory
+        subprocess.run(["sudo", "umount", "/mnt/zerofs_tmp2_p9"], check=True)
+        # Remove the directory
+        subprocess.run(["sudo", "rmdir", "/mnt/zerofs_tmp2_p9"], check=True)
+        logger.info("Plan 9 mount and directory cleaned up.")
+
+
 class _TestConfig(TypedDict):
     driver: str
     compression: str | None
@@ -578,6 +704,15 @@ TESTS: list[_TestConfig] = [
         "driver": "zerofs",
         "compression": "zstd",
         "encryption": False,
+        "ashift": 12,
+        "block_size": 4096,
+    },
+    {
+        "driver": "zerofs",
+        "compression": "zstd",
+        "encryption": False,
+        "ashift": 12,
+        "block_size": 4096,
     },
     {
         "driver": "slatedb-nbd",
@@ -607,6 +742,28 @@ TESTS: list[_TestConfig] = [
 
 
 def main():
+    with ExitStack() as stack:
+        # Set the current working directory to the script's directory
+        stack.enter_context(push_pop_cwd(os.path.dirname(__file__)))
+
+        # ZeroFS for plan 9
+        stack.enter_context(zerofs_plan9())
+
+        # Plan 9
+        stack.enter_context(setup_plan9())
+
+        with bench("overall_test_duration"):
+            # Run the Linux kernel source extraction benchmark
+            bench_linux_kernel_source_extraction()
+
+            bench_recursive_delete()
+
+            bench_sparse()
+
+            bench_write_big_zeroes()
+
+    return
+
     for test in TESTS:
         print("=" * 40)
         print("Starting new test run.")
@@ -661,7 +818,7 @@ def main():
                 bench_trim(zpool)
 
                 # Some potential issues here?
-                # bench_scrub(zpool)
+                bench_scrub(zpool)
 
                 bench_sync(zpool)
 
