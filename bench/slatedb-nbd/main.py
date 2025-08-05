@@ -758,9 +758,14 @@ def main():
 
             bench_recursive_delete()
 
-            bench_sparse()
+            # This fails on Plan 9, so skip it for now.
+            # bench_sparse()
 
             bench_write_big_zeroes()
+
+            with bench("sync"):
+                # Run the sync operation
+                subprocess.run(["sudo", "sync"], check=True)
 
     return
 
