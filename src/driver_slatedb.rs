@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use slatedb::bytes::Bytes;
 use slatedb::config::WriteOptions;
 use slatedb::{Db, SlateDBError, WriteBatch};
@@ -24,7 +26,7 @@ pub(crate) struct SlateDbDriver {
     db: Db,
     // These must be read from the metadata block
     block_size: u64,
-    device_size: u64,
+    device_size: AtomicU64,
     read_only: bool,
 }
 
@@ -96,7 +98,7 @@ impl SlateDbDriver {
         Ok(Self {
             db,
             block_size: DEFAULT_BLOCK_SIZE, // Block size is now fixed
-            device_size: DEFAULT_DEVICE_SIZE,
+            device_size: AtomicU64::new(DEFAULT_DEVICE_SIZE),
             read_only: false,
         })
     }
@@ -110,7 +112,9 @@ impl SlateDbDriver {
             );
             return Err(ProtocolError::CommandNotSupported);
         }
-        if address >= (self.device_size + Self::RESERVED_BLOCKS * self.block_size) {
+        if address
+            >= (self.device_size.load(Ordering::SeqCst) + Self::RESERVED_BLOCKS * self.block_size)
+        {
             return Err(ProtocolError::CommandNotSupported);
         }
         Ok(Self::RESERVED_BLOCKS + address / self.block_size)
@@ -186,9 +190,9 @@ impl NbdDriver for SlateDbDriver {
         ))
     }
 
-    async fn get_device_size(&self) -> Result<u64, OptionReplyError> {
+    fn get_device_size(&self) -> &AtomicU64 {
         // SlateDB does not support multiple devices, so we return the device size
-        Ok(self.device_size)
+        &self.device_size
     }
 
     async fn read(
@@ -304,6 +308,34 @@ impl NbdDriver for SlateDbDriver {
             .flush()
             .await
             .map_err(slate_db_error_to_protocol_error)
+    }
+
+    async fn resize(&self, _flags: CommandFlags, new_size: u64) -> Result<(), ProtocolError> {
+        // get a mutable reference to the device size
+        let current_size = self.device_size.load(Ordering::SeqCst);
+
+        if new_size < current_size {
+            // We cannot shrink the device size, so we produce an error
+            return Err(ProtocolError::CommandNotSupported);
+        }
+
+        if new_size == current_size {
+            // No change needed, just return Ok
+            return Ok(());
+        }
+
+        // If the new size is greater than the current size, we can grow the device
+        // by writing the new size to the metadata block
+        if let Err(e) = Self::_upsert_device_size(&self.db, new_size).await {
+            // If we fail to update the device size, we return an error
+            return Err(ProtocolError::IO);
+        }
+
+        // Update the device size in the driver
+        self.device_size.store(new_size, Ordering::SeqCst);
+
+        // SlateDB does not support resizing, so we return an error
+        Err(ProtocolError::CommandNotSupported)
     }
 
     fn get_name(&self) -> String {
