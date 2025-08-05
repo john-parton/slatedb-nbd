@@ -743,6 +743,8 @@ TESTS: list[_TestConfig] = [
 
 def main():
     with ExitStack() as stack:
+        empty_bucket("truenas/zerofs")
+
         # Set the current working directory to the script's directory
         stack.enter_context(push_pop_cwd(os.path.dirname(__file__)))
 
