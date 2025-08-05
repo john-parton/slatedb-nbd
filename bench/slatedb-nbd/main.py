@@ -231,15 +231,17 @@ def temporary_zfs_dataset(
 
 
 @contextmanager
-def zerofs_plan9(*, automatically_kill: bool = True) -> Iterator[subprocess.Popen]:
+def slate_db_background(
+    *, automatically_kill: bool = True
+) -> Iterator[subprocess.Popen]:
     """
-    Context manager to run ZeroFS in the background.
+    Context manager to run SlateDB in the background.
     The process is started at the start and killed at the end.
     """
 
     # Check if a process is already running
     existing_process = subprocess.run(
-        ["pgrep", "-f", "^target/release/zerofs$"],
+        ["pgrep", "-f", "^target/release/slatedb_nbd$"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         encoding="utf-8",
@@ -248,75 +250,36 @@ def zerofs_plan9(*, automatically_kill: bool = True) -> Iterator[subprocess.Pope
 
     if existing_process.stdout.splitlines():
         if automatically_kill:
-            logger.warning("ZeroFS is already running. Killing existing process...")
+            logger.warning(
+                "SlateDB NBD server is already running. Killing existing process..."
+            )
             # Kill the existing process
-            subprocess.run(["pkill", "-f", "^target/release/zerofs$"], check=True)
+            subprocess.run(["pkill", "-f", "^target/release/slatedb_nbd$"], check=True)
         else:
-            logger.error("ZeroFS is already running.")
+            logger.error("SlateDB NBD server is already running.")
             raise RuntimeError(
-                "ZeroFS is already running. Please stop it before starting a new instance."
+                "SlateDB NBD server is already running. Please stop it before starting a new instance."
             )
 
-    cwd = os.getcwd()
-
-    os.chdir("/tmp")
-
-    # Check if 'ZeroFS' directory exists
-    if not os.path.exists("ZeroFS"):
-        logger.debug("Cloning ZeroFS repository...")
-        subprocess.run(["git", "clone", "git@github.com:Barre/ZeroFS.git", "ZeroFS"])
-        os.chdir("ZeroFS")
-    else:
-        os.chdir("ZeroFS")
-        logger.debug("Pulling latest changes for ZeroFS repository...")
-        subprocess.run(["git", "pull"], check=True)
-
-    # Build ZeroFS in release mode
-    logger.debug("Building ZeroFS in release mode...")
-    subprocess.run(
-        ["cargo", "build", "--profile", "release"],
-        check=True,
-    )
-
-    zerofs_env = os.environ.copy()
-    zerofs_env["AWS_ALLOW_HTTP"] = "true"
-    zerofs_env["SLATEDB_CACHE_DIR"] = "/tmp/zerofs-cache"
-    zerofs_env["SLATEDB_CACHE_SIZE_GB"] = "2"
-    zerofs_env["ZEROFS_ENCRYPTION_PASSWORD"] = "secret"
-
-    # Start ZeroFS in the background, should be relatively quick because
-    # we built it above
-    logger.debug("Starting ZeroFS in the background...")
+    # Start SlateDB in the background
+    logger.debug("Starting SlateDB NBD server in the background...")
     process = subprocess.Popen(
-        [
-            "cargo",
-            "run",
-            "--profile",
-            "release",
-            "--",
-            "s3://zerofs",
-        ],
-        env=zerofs_env,
-        stderr=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
+        ["cargo", "run", "--profile", "release"],
     )
-
-    # Restore previous working directory
-    os.chdir(cwd)
 
     try:
         # Wait a bit for it to start
-        logger.debug("Waiting for ZeroFS to start...")
+        logger.debug("Waiting for SlateDB NBD server to start...")
         time.sleep(5)
-        logger.debug("ZeroFS started successfully.")
+        logger.debug("SlateDB NBD server started successfully.")
         yield process  # Yield control to the block of code using this context manager
     finally:
-        logger.debug("Stopping ZeroFS...")
-        # Kill the ZeroFS process
+        logger.debug("Stopping SlateDB NBD server...")
+        # Kill the SlateDB process
         process.terminate()
-        logger.debug("Waiting for ZeroFS to stop...")
+        logger.debug("Waiting for SlateDB NBD server to stop...")
         process.wait()
-        logger.debug("ZeroFS stopped.")
+        logger.debug("SlateDB NBD server stopped.")
 
 
 @contextmanager
@@ -408,58 +371,6 @@ def zerofs_background(*, automatically_kill: bool = True) -> Iterator[subprocess
         logger.debug("Waiting for ZeroFS to stop...")
         process.wait()
         logger.debug("ZeroFS stopped.")
-
-
-@contextmanager
-def slate_db_background(
-    *, automatically_kill: bool = True
-) -> Iterator[subprocess.Popen]:
-    """
-    Context manager to run SlateDB in the background.
-    The process is started at the start and killed at the end.
-    """
-
-    # Check if a process is already running
-    existing_process = subprocess.run(
-        ["pgrep", "-f", "^target/release/slatedb_nbd$"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        encoding="utf-8",
-        check=False,
-    )
-
-    if existing_process.stdout.splitlines():
-        if automatically_kill:
-            logger.warning(
-                "SlateDB NBD server is already running. Killing existing process..."
-            )
-            # Kill the existing process
-            subprocess.run(["pkill", "-f", "^target/release/slatedb_nbd$"], check=True)
-        else:
-            logger.error("SlateDB NBD server is already running.")
-            raise RuntimeError(
-                "SlateDB NBD server is already running. Please stop it before starting a new instance."
-            )
-
-    # Start SlateDB in the background
-    logger.debug("Starting SlateDB NBD server in the background...")
-    process = subprocess.Popen(
-        ["cargo", "run", "--profile", "release"],
-    )
-
-    try:
-        # Wait a bit for it to start
-        logger.debug("Waiting for SlateDB NBD server to start...")
-        time.sleep(5)
-        logger.debug("SlateDB NBD server started successfully.")
-        yield process  # Yield control to the block of code using this context manager
-    finally:
-        logger.debug("Stopping SlateDB NBD server...")
-        # Kill the SlateDB process
-        process.terminate()
-        logger.debug("Waiting for SlateDB NBD server to stop...")
-        process.wait()
-        logger.debug("SlateDB NBD server stopped.")
 
 
 def empty_bucket(
@@ -649,7 +560,7 @@ def bench_snapshot(dataset: str) -> None:
 def setup_plan9():
     # Make directory
     subprocess.run(
-        ["sudo", "mkdir", "-p", "/mnt/zerofs_tmp2_p9"],
+        ["sudo", "mkdir", "-p", "/mnt/zerofs_9p"],
         check=True,
     )
     subprocess.run(
@@ -661,7 +572,7 @@ def setup_plan9():
             "-o",
             "trans=tcp,port=5564,version=9p2000.L,msize=1048576,cache=mmap,access=user",
             "127.0.0.1",
-            "/mnt/zerofs_tmp2_p9",
+            "/mnt/zerofs_9p",
         ],
         check=True,
     )
@@ -670,16 +581,16 @@ def setup_plan9():
     )
     print(mount.stdout)
 
-    os.chdir("/mnt/zerofs_tmp2_p9")
+    os.chdir("/mnt/zerofs_9p")
 
     try:
         yield  # Yield control to the block of code using this context manager
     finally:
         os.chdir("/")  # Change the working directory back to root
         # Unmount the directory
-        subprocess.run(["sudo", "umount", "/mnt/zerofs_tmp2_p9"], check=True)
+        subprocess.run(["sudo", "umount", "/mnt/zerofs_9p"], check=True)
         # Remove the directory
-        subprocess.run(["sudo", "rmdir", "/mnt/zerofs_tmp2_p9"], check=True)
+        subprocess.run(["sudo", "rmdir", "/mnt/zerofs_9p"], check=True)
         logger.info("Plan 9 mount and directory cleaned up.")
 
 
@@ -743,13 +654,16 @@ TESTS: list[_TestConfig] = [
 
 def main():
     with ExitStack() as stack:
+        print("=" * 40)
+        print("Starting new test run.")
+        print("Zerofs/Plan 9 baseline test.")
         empty_bucket("truenas/zerofs")
 
         # Set the current working directory to the script's directory
         stack.enter_context(push_pop_cwd(os.path.dirname(__file__)))
 
         # ZeroFS for plan 9
-        stack.enter_context(zerofs_plan9())
+        stack.enter_context(zerofs_background())
 
         # Plan 9
         stack.enter_context(setup_plan9())
@@ -779,8 +693,6 @@ def main():
         )
         print("Space usage:")
         print(mcli.stdout, end="")
-
-    return
 
     for test in TESTS:
         print("=" * 40)
