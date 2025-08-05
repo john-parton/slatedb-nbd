@@ -12,7 +12,6 @@ import subprocess
 import sys
 import time
 from typing import Iterator, NotRequired, TypedDict
-from unittest import TestCase
 
 
 logger = logging.getLogger(__name__)
@@ -51,7 +50,7 @@ def temporary_nbd_device(
     *,
     port: int = 10809,
     block_size: int | None = None,
-    device_index: int = 7,
+    device_index: int = 6,
     automatically_disconnect: bool = True,
     connections: int | None = None,
 ) -> Iterator[str]:
@@ -563,12 +562,15 @@ def bench_snapshot(dataset: str) -> None:
     logger.info("ZFS snapshot created successfully.")
 
 
-def bench_postgres(mountpoint: str, *, postgres_version: str = "17.5") -> None:
+@contextmanager
+def postgres_container(
+    mountpoint: str, postgres_version: str = "17.5"
+) -> Iterator[subprocess.Popen]:
+    """Context manager to run a PostgreSQL container.
+    The container is started at the start and stopped at the end.
     """
-    Benchmarks PostgreSQL operations.
-    This is a placeholder for the actual benchmarking logic.
-    """
-    # Start a docker container with the mountpoint as its data volume
+
+    suffix = secrets.token_hex(4)
 
     logger.info("Pulling PostgreSQL Docker image...")
     subprocess.run(
@@ -578,9 +580,13 @@ def bench_postgres(mountpoint: str, *, postgres_version: str = "17.5") -> None:
 
     # Remove a container if it exists
     subprocess.run(
-        ["docker", "rm", "postgres_init"],
+        ["docker", "rm", "-f", f"postgres_init_{suffix}"],
         check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
+
+    # host all all 172.18.0.0/16 md5
 
     with bench("postgres_container_initialization"):
         logger.info("Initializing PostgreSQL test container...")
@@ -589,9 +595,11 @@ def bench_postgres(mountpoint: str, *, postgres_version: str = "17.5") -> None:
                 "docker",
                 "run",
                 "--name",
-                "postgres_init",
+                f"postgres_init_{suffix}",
                 "-e",
                 "POSTGRES_PASSWORD=secret",
+                "-e",
+                'POSTGRES_INITDB_ARGS="--auth=scram-sha-256"',
                 "-v",
                 f"{mountpoint}/postgres:/var/lib/postgresql/data",
                 f"postgres:{postgres_version}",
@@ -603,9 +611,12 @@ def bench_postgres(mountpoint: str, *, postgres_version: str = "17.5") -> None:
         )
 
     # Remove the container after initialization
+    logger.info("Removing PostgreSQL old serve container...")
     subprocess.run(
-        ["docker", "rm", "postgres_serve"],
-        check=True,
+        ["docker", "rm", "-f", f"postgres_serve_{suffix}"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
 
     # Start the container listening on port 5434
@@ -615,7 +626,8 @@ def bench_postgres(mountpoint: str, *, postgres_version: str = "17.5") -> None:
             "docker",
             "run",
             "--name",
-            "postgres_serve",
+            f"postgres_serve_{suffix}",
+            # Environmental variables not explicitly required here, only for init
             "-e",
             "POSTGRES_PASSWORD=secret",
             "-p",
@@ -625,57 +637,88 @@ def bench_postgres(mountpoint: str, *, postgres_version: str = "17.5") -> None:
             f"postgres:{postgres_version}",
         ]
     )
+    try:
+        # Wait for PostgreSQL to start
+        logger.info("Waiting for PostgreSQL to start...")
+        time.sleep(10)
+        yield docker  # Yield control to the block of code using this context manager
+    finally:
+        # Stop the PostgreSQL container
+        logger.info("Stopping PostgreSQL container...")
+        subprocess.run(["docker", "stop", f"postgres_serve_{suffix}"], check=False)
+        # Wait for the container to stop
 
-    # Wait for PostgreSQL to start
-    logger.info("Waiting for PostgreSQL to start...")
-    time.sleep(10)
+        logger.debug("Waiting for PostgreSQL to stop...")
+        # Kill the ZeroFS process
+        docker.terminate()
+        logger.debug("Waiting for PostgreSQL container to stop...")
+        docker.wait()
+        logger.info("PostgreSQL container stopped.")
 
-    # Init test database
-    with bench("pgbench_initialization"):
-        subprocess.run(
-            [
-                "pgbench",
-                "-U",
-                "postgres",
-                "-h",
-                "localhost",
-                "-p",
-                "5434",
-                "-i",
-                "postgres",
-            ],
-            check=True,
-        )
 
-    with bench("pgbench_run"):
-        pgbench = subprocess.run(
-            [
-                "pgbench",
-                "-U",
-                "postgres",
-                "-h",
-                "localhost",
-                "-p",
-                "5434",
-                "-i",
-                "postgres",
-            ],
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            encoding="utf-8",
-        )
+def bench_postgres(mountpoint: str, *, postgres_version: str = "17.5") -> None:
+    """
+    Benchmarks PostgreSQL operations.
+    This is a placeholder for the actual benchmarking logic.
+    """
 
+    pgbench_env = os.environ.copy()
+    pgbench_env["PGPASSWORD"] = "secret"
+
+    with postgres_container(mountpoint, postgres_version):
+        # Init test database
+        with bench("pgbench_initialization"):
+            pgbench = subprocess.run(
+                [
+                    "pgbench",
+                    "-U",
+                    "postgres",
+                    "-h",
+                    "127.0.0.1",
+                    "-p",
+                    "5434",
+                    "-i",
+                    "postgres",
+                ],
+                check=False,
+                env=pgbench_env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                encoding="utf-8",
+            )
+
+        print("PostgreSQL database initialized.")
+        print("Return code:", pgbench.returncode)
         print("STDOUT")
         print(pgbench.stdout)
         print("STDERR")
         print(pgbench.stderr)
 
-    # Stop the PostgreSQL container
-    logger.info("Stopping PostgreSQL container...")
-    subprocess.run(["docker", "stop", "postgres_serve"], check=True)
-    # Wait for the container to stop
-    docker.wait()
+        with bench("pgbench_run"):
+            pgbench = subprocess.run(
+                [
+                    "pgbench",
+                    "-U",
+                    "postgres",
+                    "-h",
+                    "127.0.0.1",
+                    "-p",
+                    "5434",
+                    "-i",
+                    "postgres",
+                ],
+                check=False,
+                env=pgbench_env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                encoding="utf-8",
+            )
+            print("PostgreSQL pgbench run completed.")
+            print("Return code:", pgbench.returncode)
+            print("STDOUT")
+            print(pgbench.stdout)
+            print("STDERR")
+            print(pgbench.stderr)
 
 
 @contextmanager
@@ -891,11 +934,6 @@ def cli():
             )
 
             with bench("overall_test_duration"):
-                bench_postgres(
-                    mountpoint=f"/mnt/{dataset}",
-                )
-                break
-
                 # Run the Linux kernel source extraction benchmark
                 bench_linux_kernel_source_extraction()
 
