@@ -2,46 +2,14 @@ use slatedb::bytes::Bytes;
 use slatedb::config::WriteOptions;
 use slatedb::{Db, SlateDBError, WriteBatch};
 
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio_nbd::device::NbdDriver;
 use tokio_nbd::errors::{OptionReplyError, ProtocolError};
 use tokio_nbd::flags::{CommandFlags, ServerFeatures};
 
-// These are settings which must be persistent across restarts
-#[derive(Serialize, Deserialize, Debug, Clone)]
-enum SlateDbBlockSettings {
-    V1 {
-        block_size: u64,  // Block size in bytes
-        device_size: u64, // Total size of the device in bytes
-    },
-}
-
-impl SlateDbBlockSettings {
-    fn block_size(&self) -> u64 {
-        match self {
-            SlateDbBlockSettings::V1 { block_size, .. } => *block_size,
-        }
-    }
-
-    fn device_size(&self) -> u64 {
-        match self {
-            SlateDbBlockSettings::V1 { device_size, .. } => *device_size,
-        }
-    }
-}
-
-impl Default for SlateDbBlockSettings {
-    fn default() -> Self {
-        SlateDbBlockSettings::V1 {
-            // Block size of 4 KiB
-            // Note that the default for most clients are 512 or 1024
-            // It is recommended to run the client with `-b 4096` to force compatibility
-            block_size: 4096,
-            device_size: 10 * 1024 * 1024 * 1024, // 10 GiB,
-        }
-    }
-}
+// Constants for defaults
+const DEFAULT_BLOCK_SIZE: u64 = 4096; // 4 KiB - Block size is now fixed
+const DEFAULT_DEVICE_SIZE: u64 = 10 * 1024 * 1024 * 1024; // 10 GiB
 
 fn slate_db_error_to_protocol_error(err: SlateDBError) -> ProtocolError {
     match err {
@@ -64,37 +32,71 @@ pub(crate) struct SlateDbDriver {
 pub enum InitError {
     #[error("Failed to initialize SlateDB: {0}")]
     SlateDBError(#[from] SlateDBError),
-    #[error("Failed to serialize or deserialize settings: {0}")]
-    JsonError(#[from] serde_json::Error),
+    #[error("Failed to read or write to metadata blocks: {0}")]
+    MetadataFailure(String),
 }
 
 impl SlateDbDriver {
-    const RESERVED_BLOCKS: u64 = 8; // Reserved for metadata, etc.
+    // Reserved blocks at the start of the device for metadata
+    // Block zero is used to store the device size as a u64
+    const RESERVED_BLOCKS: u64 = 8;
+    const SIZE_BLOCK: u64 = 0;
 
-    pub(crate) async fn try_from_db(db: Db) -> std::result::Result<Self, InitError> {
-        // Get zero'th block to determine block size
-        // and deserialize metadata
-        let settings = match db.get(Self::block_to_key(0)).await? {
-            Some(data) => serde_json::from_slice::<SlateDbBlockSettings>(&data)?,
-            None => {
-                // write out default
-                let default_metadata = SlateDbBlockSettings::default();
-                db.put(
-                    Self::block_to_key(0),
-                    &serde_json::to_vec(&default_metadata)?,
-                )
-                .await?;
-
-                default_metadata
+    async fn _upsert_device_size(db: &Db, desired_size: u64) -> Result<(), InitError> {
+        let current_size = match db.get(Self::block_to_key(Self::SIZE_BLOCK)).await? {
+            Some(data) if data.len() == 8 => Some(u64::from_le_bytes([
+                data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+            ])),
+            Some(data) if data.is_empty() => None,
+            None => None,
+            _ => {
+                return Err(InitError::MetadataFailure(
+                    "Device size metadata is corrupted".to_string(),
+                ));
             }
         };
 
-        // Logic to upgrade settings may need to be added here in the future
+        // A sort of un-idiomatic pattern here
+        if let Some(size) = current_size {
+            match desired_size.cmp(&size) {
+                std::cmp::Ordering::Equal => Ok(()),
+                std::cmp::Ordering::Greater => {
+                    // We cannot shrink the device size, so we produce an
+                    Err(InitError::MetadataFailure(
+                        "Cannot shrink device size".to_string(),
+                    ))
+                }
+                std::cmp::Ordering::Less => {
+                    // If the current size is greater than the desired size, we can
+                    // grow the device by writing the desired size
+                    db.put(
+                        Self::block_to_key(Self::SIZE_BLOCK),
+                        &desired_size.to_le_bytes(),
+                    )
+                    .await?;
+                    // Return Ok to indicate the size was updated
+                    Ok(())
+                }
+            }
+        } else {
+            // If the current size is None, write out the desired size
+            // unconditionally
+            db.put(
+                Self::block_to_key(Self::SIZE_BLOCK),
+                &desired_size.to_le_bytes(),
+            )
+            .await?;
+            Ok(())
+        }
+    }
+
+    pub(crate) async fn try_from_db(db: Db) -> std::result::Result<Self, InitError> {
+        Self::_upsert_device_size(&db, DEFAULT_DEVICE_SIZE).await?;
 
         Ok(Self {
             db,
-            block_size: settings.block_size(),
-            device_size: settings.device_size(),
+            block_size: DEFAULT_BLOCK_SIZE, // Block size is now fixed
+            device_size: DEFAULT_DEVICE_SIZE,
             read_only: false,
         })
     }
@@ -152,7 +154,12 @@ impl SlateDbDriver {
 
 impl NbdDriver for SlateDbDriver {
     fn get_features(&self) -> ServerFeatures {
-        ServerFeatures::CAN_MULTI_CONN
+        ServerFeatures::SEND_FLUSH
+            | ServerFeatures::SEND_FUA
+            | ServerFeatures::SEND_TRIM
+            | ServerFeatures::SEND_WRITE_ZEROES
+            | ServerFeatures::CAN_MULTI_CONN
+        // Todo: implement resize. Shouldn't be too bad
     }
 
     async fn get_read_only(&self) -> Result<bool, OptionReplyError> {
@@ -261,10 +268,7 @@ impl NbdDriver for SlateDbDriver {
         self.db
             .flush()
             .await
-            .map_err(slate_db_error_to_protocol_error)?;
-
-        println!("Flush command completed");
-        Ok(())
+            .map_err(slate_db_error_to_protocol_error)
     }
 
     async fn trim(
@@ -296,32 +300,10 @@ impl NbdDriver for SlateDbDriver {
     }
 
     async fn disconnect(&self, _flags: CommandFlags) -> Result<(), ProtocolError> {
-        Ok(())
-    }
-
-    async fn resize(&self, _flags: CommandFlags, _size: u64) -> Result<(), ProtocolError> {
-        // The important thing is to write back out to our metadata block
-        // and update the block size
-        // We won't support resizing to a smaller size for now
-        Err(ProtocolError::CommandNotSupported)
-    }
-
-    async fn cache(
-        &self,
-        _flags: CommandFlags,
-        _offset: u64,
-        _length: u32,
-    ) -> Result<(), ProtocolError> {
-        Err(ProtocolError::CommandNotSupported)
-    }
-
-    async fn block_status(
-        &self,
-        flags: tokio_nbd::flags::CommandFlags,
-        offset: u64,
-        length: u32,
-    ) -> Result<(), ProtocolError> {
-        Err(ProtocolError::CommandNotSupported)
+        self.db
+            .flush()
+            .await
+            .map_err(slate_db_error_to_protocol_error)
     }
 
     fn get_name(&self) -> String {
