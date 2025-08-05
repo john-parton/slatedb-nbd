@@ -560,7 +560,7 @@ def bench_snapshot(dataset: str) -> None:
 def setup_plan9():
     # Make directory
     subprocess.run(
-        ["sudo", "mkdir", "-p", "/mnt/zerofs_9p"],
+        ["sudo", "mkdir", "-p", "/mnt/zerofs_9p_test"],
         check=True,
     )
     subprocess.run(
@@ -572,7 +572,7 @@ def setup_plan9():
             "-o",
             "trans=tcp,port=5564,version=9p2000.L,msize=1048576,cache=mmap,access=user",
             "127.0.0.1",
-            "/mnt/zerofs_9p",
+            "/mnt/zerofs_9p_test",
         ],
         check=True,
     )
@@ -581,16 +581,16 @@ def setup_plan9():
     )
     print(mount.stdout)
 
-    os.chdir("/mnt/zerofs_9p")
+    os.chdir("/mnt/zerofs_9p_test")
 
     try:
         yield  # Yield control to the block of code using this context manager
     finally:
         os.chdir("/")  # Change the working directory back to root
         # Unmount the directory
-        subprocess.run(["sudo", "umount", "/mnt/zerofs_9p"], check=True)
+        subprocess.run(["sudo", "umount", "/mnt/zerofs_9p_test"], check=True)
         # Remove the directory
-        subprocess.run(["sudo", "rmdir", "/mnt/zerofs_9p"], check=True)
+        subprocess.run(["sudo", "rmdir", "/mnt/zerofs_9p_test"], check=True)
         logger.info("Plan 9 mount and directory cleaned up.")
 
 
