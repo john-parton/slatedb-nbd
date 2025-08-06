@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 object_store = { version = "0.12.3", features = ["aws", "fs"] }
-slatedb = "0.7.0"
+slatedb = { version = "0.7.0", features = ["wal_disable"] }
 thiserror = "2.0.12"
 tokio = "1.47.0"
 tokio-nbd = "0.2.0"
