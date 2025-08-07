@@ -1,22 +1,19 @@
 import argparse
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack
 
-from dataclasses import dataclass, field
-import itertools as it
-import re
 import json
 import logging
 import os
-import secrets
 
 import subprocess
-import sys
-import time
-from typing import Iterator, NotRequired, TypedDict
+from typing import NotRequired, TypedDict
 
+from slatedb_nbd_bench.bencher import Bencher
+from slatedb_nbd_bench.drivers.config import get_text_matrix
 from slatedb_nbd_bench.drivers.slatedb_nbd import slate_db_background
 from slatedb_nbd_bench.drivers.zerofs import setup_plan9, zerofs_background
 from slatedb_nbd_bench.nbd import temporary_nbd_device
+from slatedb_nbd_bench.object_storage import empty_bucket
 from slatedb_nbd_bench.tests import bench_scrub, bench_snapshot, bench_sync, bench_trim
 from slatedb_nbd_bench.tests.files import (
     bench_linux_kernel_source_extraction,
@@ -35,42 +32,6 @@ logging.basicConfig(
     level=logging.DEBUG,
     handlers=[logging.StreamHandler()],
 )
-
-
-@contextmanager
-def empty_bucket(
-    bucket_name: str,
-) -> Iterator[None]:
-    """
-    Empty an S3 bucket using the AWS CLI.
-    """
-    logger.info(f"Emptying S3 bucket {bucket_name}...")
-    subprocess.run(
-        [
-            "mcli",
-            "rm",
-            "--force",
-            "--recursive",
-            bucket_name,
-        ],
-        stderr=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        check=True,
-    )
-
-    try:
-        yield
-    finally:
-        # Show space usage in S3 bucket
-        logger.info("Checking space usage in S3 bucket:")
-        mcli = subprocess.run(
-            ["mcli", "du", "truenas/zerofs"],
-            stdout=subprocess.PIPE,
-            check=True,
-            encoding="utf-8",
-        )
-        print("Space usage:")
-        print(mcli.stdout, end="")
 
 
 class _TestConfig(TypedDict):
@@ -142,31 +103,6 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 add_arguments(parser)
-
-
-def get_text_matrix(
-    *,
-    drivers: list[str],
-    compression: list[str],
-    connections: list[int],
-    wal_enabled: bool | None = None,
-) -> Iterator[_TestConfig]:
-    conf = it.product(
-        drivers,
-        compression,
-        connections,
-        # Try both WAL on/off if testing, otherwise use defaults
-        [True, False] if wal_enabled is None else [None],
-    )
-
-    for case_driver, case_compression, case_connections, case_wal_enabled in conf:
-        yield {
-            "driver": case_driver,
-            "compression": None if case_compression == "off" else case_compression,
-            "connections": case_connections,
-            "wal_enabled": case_wal_enabled,
-            **DRIVER_DEFAULTS.get(case_driver, {}),
-        }
 
 
 def cli():
