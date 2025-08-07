@@ -3,3 +3,4 @@
 /tokio-nbd/target
 .env
 .envrc
+*.pyc

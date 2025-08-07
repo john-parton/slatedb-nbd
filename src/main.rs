@@ -23,9 +23,6 @@ async fn main() -> std::io::Result<()> {
     })?;
 
     println!("Using SlateDB settings: {:?}", settings);
-    println!("SLATEDB_WAL_ENABLED: {}", settings.wal_enabled);
-
-    return Ok(());
 
     let object_store: Arc<dyn ObjectStore> = Arc::new(
         object_store::aws::AmazonS3Builder::new()
