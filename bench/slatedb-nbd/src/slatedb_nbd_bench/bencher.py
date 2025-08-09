@@ -12,8 +12,7 @@ class _BenchResult(TypedDict):
 
 
 @dataclass
-class Bencher[T]:
-    context: T
+class Bencher:
     results: list[_BenchResult] = field(default_factory=list)
 
     def push(self, *, label: str, elapsed: float) -> None:

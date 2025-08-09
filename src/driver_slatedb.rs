@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use slatedb::bytes::Bytes;
 use slatedb::config::WriteOptions;
 use slatedb::{Db, SlateDBError, WriteBatch};
@@ -24,7 +26,7 @@ pub(crate) struct SlateDbDriver {
     db: Db,
     // These must be read from the metadata block
     block_size: u64,
-    device_size: u64,
+    device_size: AtomicU64,
     read_only: bool,
 }
 
@@ -96,7 +98,7 @@ impl SlateDbDriver {
         Ok(Self {
             db,
             block_size: DEFAULT_BLOCK_SIZE, // Block size is now fixed
-            device_size: DEFAULT_DEVICE_SIZE,
+            device_size: AtomicU64::new(DEFAULT_DEVICE_SIZE),
             read_only: false,
         })
     }
@@ -110,7 +112,9 @@ impl SlateDbDriver {
             );
             return Err(ProtocolError::CommandNotSupported);
         }
-        if address >= (self.device_size + Self::RESERVED_BLOCKS * self.block_size) {
+        if address
+            >= (self.device_size.load(Ordering::Acquire) + Self::RESERVED_BLOCKS * self.block_size)
+        {
             return Err(ProtocolError::CommandNotSupported);
         }
         Ok(Self::RESERVED_BLOCKS + address / self.block_size)
@@ -186,10 +190,14 @@ impl NbdDriver for SlateDbDriver {
         ))
     }
 
-    async fn get_device_size(&self) -> Result<u64, OptionReplyError> {
-        // SlateDB does not support multiple devices, so we return the device size
-        Ok(self.device_size)
+    fn get_device_size(&self) -> &AtomicU64 {
+        &self.device_size
     }
+
+    // async fn get_device_size(&self) -> Result<u64, OptionReplyError> {
+    //     // SlateDB does not support multiple devices, so we return the device size
+    //     Ok(self.device_size)
+    // }
 
     async fn read(
         &self,

@@ -6,7 +6,6 @@ import logging
 import os
 
 import subprocess
-from typing import NotRequired, TypedDict
 
 from slatedb_nbd_bench.bencher import Bencher
 from slatedb_nbd_bench.drivers.config import get_text_matrix
@@ -17,7 +16,6 @@ from slatedb_nbd_bench.object_storage import empty_bucket
 from slatedb_nbd_bench.tests import bench_scrub, bench_snapshot, bench_sync, bench_trim
 from slatedb_nbd_bench.tests.files import (
     bench_linux_kernel_source_extraction,
-    bench_recursive_delete,
     bench_sparse,
     bench_write_big_zeroes,
 )
@@ -33,30 +31,6 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()],
 )
 
-
-class _TestConfig(TypedDict):
-    driver: str
-    compression: str | None
-    encryption: bool
-    ashift: NotRequired[int | None]
-    block_size: NotRequired[
-        int | None
-    ]  # Really only a small number of values are appropriate
-    slog_size: NotRequired[int | None]  # Only used for SlateDB NBD tests
-    connection: NotRequired[int | None]  # Number of connections to use for NBD
-    wal_enabled: NotRequired[bool | None]  # Whether to enable WAL for SlateDB NBD
-
-
-DRIVER_DEFAULTS = {
-    "zerofs": {
-        "encryption": False,
-    },
-    "slatedb-nbd": {
-        "encryption": True,
-        "ashift": 12,
-        "block_size": 4096,
-    },
-}
 
 parser = argparse.ArgumentParser(
     description="Run benchmarks for SlateDB NBD and ZeroFS with various configurations."
@@ -110,6 +84,8 @@ def cli():
 
     args = parser.parse_args()
 
+    results = []
+
     for test in get_text_matrix(
         drivers=args.drivers,
         compression=args.compression,
@@ -118,7 +94,7 @@ def cli():
         print("=" * 40)
         print("Starting new test run.")
         print(json.dumps(test, indent=2))
-        bencher = Bencher(test)
+        bencher = Bencher()
 
         with ExitStack() as stack:
             stack.enter_context(push_pop_cwd(os.path.dirname(__file__)))
@@ -135,8 +111,6 @@ def cli():
                 with bencher.bench("overall_test_duration"):
                     # Run the Linux kernel source extraction benchmark
                     bench_linux_kernel_source_extraction(bencher=bencher)
-
-                    bench_recursive_delete(bencher=bencher)
 
                     # This fails on Plan 9, so skip it for now.
                     # bench_sparse()
@@ -176,18 +150,16 @@ def cli():
                 # Run the Linux kernel source extraction benchmark
                 bench_linux_kernel_source_extraction(bencher=bencher)
 
-                bench_recursive_delete(bencher=bencher)
-
                 bench_sparse(bencher=bencher)
 
                 bench_write_big_zeroes(bencher=bencher)
 
                 bench_snapshot(zfs["dataset"], bencher=bencher)
 
-                bench_trim(zfs["pool"], bencher=bencher)
+                # bench_trim(zfs["pool"], bencher=bencher)
 
                 # Some potential issues here?
-                bench_scrub(zfs["pool"], bencher=bencher)
+                # bench_scrub(zfs["pool"], bencher=bencher)
 
                 bench_sync(zfs["pool"], bencher=bencher)
 
@@ -201,6 +173,16 @@ def cli():
             )
             print("Space usage:")
             print(mcli.stdout, end="")
+
+        results.append(
+            {
+                "config": test,
+                "results": bencher.results,
+            }
+        )
+
+    for result in results:
+        print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":
