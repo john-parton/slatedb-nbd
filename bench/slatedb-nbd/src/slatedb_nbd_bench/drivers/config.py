@@ -37,21 +37,20 @@ def get_text_matrix(
     drivers: list[str],
     compression: list[str],
     connections: list[int],
-    wal_enabled: bool | None = None,
+    wal_enabled: list[bool],
 ) -> Iterator[_TestConfig]:
     conf = it.product(
         drivers,
         compression,
         connections,
-        # Try both WAL on/off if testing, otherwise use defaults
-        [True, False] if wal_enabled is None else [None],
+        wal_enabled,
     )
 
     for case_driver, case_compression, case_connections, case_wal_enabled in conf:
         yield {
+            **DRIVER_DEFAULTS.get(case_driver, {}),
             "driver": case_driver,
             "compression": None if case_compression == "off" else case_compression,
             "connections": case_connections,
             "wal_enabled": case_wal_enabled,
-            **DRIVER_DEFAULTS.get(case_driver, {}),
         }

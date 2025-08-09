@@ -13,6 +13,7 @@ from slatedb_nbd_bench.drivers.slatedb_nbd import slate_db_background
 from slatedb_nbd_bench.drivers.zerofs import setup_plan9, zerofs_background
 from slatedb_nbd_bench.nbd import temporary_nbd_device
 from slatedb_nbd_bench.object_storage import empty_bucket
+from slatedb_nbd_bench.stats import RunningGeometricStats
 from slatedb_nbd_bench.tests import bench_scrub, bench_snapshot, bench_sync, bench_trim
 from slatedb_nbd_bench.tests.files import (
     bench_linux_kernel_source_extraction,
@@ -84,12 +85,17 @@ def cli():
 
     args = parser.parse_args()
 
+    assert False, args
+
     results = []
+
+    wal_enabled = [True, False] if args.test_wal_enabled else [None]
 
     for test in get_text_matrix(
         drivers=args.drivers,
         compression=args.compression,
         connections=args.connections,
+        wal_enabled=wal_enabled,
     ):
         print("=" * 40)
         print("Starting new test run.")
@@ -177,12 +183,65 @@ def cli():
         results.append(
             {
                 "config": test,
-                "results": bencher.results,
+                "tests": bencher.results,
             }
         )
 
     for result in results:
+        stats = RunningGeometricStats()
+        for test in result["tests"]:
+            # Don't double count this one
+            if test["label"] == "overall_test_duration":
+                continue
+            stats.push(test["elapsed"])
+        result["summary"] = {
+            "geometric_mean": stats.geometric_mean(),
+            "geometric_standard_deviation": stats.geometric_standard_deviation(),
+        }
         print(json.dumps(result, indent=2))
+
+    def compare(key):
+        values = getattr(args, key)
+
+        if len(values) > 1:
+            results_map = {value: RunningGeometricStats() for value in values}
+
+            for test in result["tests"]:
+                if test["label"] == "overall_test_duration":
+                    continue
+                results_map[result["config"][key]].push(test["elapsed"])
+
+            print("=" * 40)
+            print(f"Comparing {key}")
+            for value in values:
+                stats = results_map[value]
+                print(f"Value: {value}")
+                print(f"  Geometric Mean: {stats.geometric_mean()}")
+                print(
+                    f"  Geometric Standard Deviation: {stats.geometric_standard_deviation()}"
+                )
+
+    compare("driver")
+    compare("compression")
+    compare("connections")
+
+    if len(wal_enabled) > 1:
+        results_map = {enabled: RunningGeometricStats() for enabled in wal_enabled}
+        for result in results:
+            for test in result["tests"]:
+                if test["label"] == "overall_test_duration":
+                    continue
+                results_map[result["config"]["wal_enabled"]].push(test["elapsed"])
+
+        print("=" * 40)
+        print("Comparing wal_enabled")
+        for value in wal_enabled:
+            stats = results_map[value]
+            print(f"Value: {value}")
+            print(f"  Geometric Mean: {stats.geometric_mean()}")
+            print(
+                f"  Geometric Standard Deviation: {stats.geometric_standard_deviation()}"
+            )
 
 
 if __name__ == "__main__":

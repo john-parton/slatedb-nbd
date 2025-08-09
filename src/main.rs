@@ -67,13 +67,12 @@ async fn main() -> std::io::Result<()> {
         )
     })?;
 
-    info!("Initializing NBD server on 127.0.0.0");
+    info!("Initializing NBD server on 127.0.0.1");
 
     let server = NbdServerBuilder::builder()
         .devices(vec![device])
-        .host("127.0.0.0")
+        .host("127.0.0.1")
         .build();
-
     info!("Starting NBD server...");
     server.listen().await?;
 

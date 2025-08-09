@@ -17,8 +17,6 @@ def bench_sync(zpool: str, *, bencher: Bencher) -> None:
     This is a placeholder for the actual benchmarking logic.
     """
     logger.info("Running sync operation...")
-    with bencher.bench("sync"):
-        subprocess.run(["sudo", "sync"], check=True)
     with bencher.bench("zpool sync"):
         subprocess.run(["sudo", "zpool", "sync", zpool], check=True)
     logger.info("Sync operation completed.")

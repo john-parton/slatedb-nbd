@@ -59,6 +59,10 @@ def zerofs_background(
         logger.debug("Pulling latest changes for ZeroFS repository...")
         subprocess.run(["git", "pull"], check=True)
 
+    # Checkout '5663062'
+    # Current HEAD doesn't work at time of writing
+    subprocess.run(["git", "checkout", "5663062"], check=True)
+
     # Build ZeroFS in release mode
     logger.debug("Building ZeroFS in release mode...")
     subprocess.run(
@@ -97,7 +101,7 @@ def zerofs_background(
     try:
         # Wait a bit for it to start
         logger.debug("Waiting for ZeroFS to start...")
-        time.sleep(5)
+        time.sleep(30)
         logger.debug("ZeroFS started successfully.")
         yield process  # Yield control to the block of code using this context manager
     finally:

@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 # Just basic information
 class Info(TypedDict):
-    zpool: str
+    pool: str
     dataset: str
     mountpoint: str
 
@@ -173,7 +173,7 @@ def temporary_zfs(
         )
 
         yield {
-            "zpool": pool,
+            "pool": pool,
             "dataset": info["name"],
             "mountpoint": info["mountpoint"],
         }
