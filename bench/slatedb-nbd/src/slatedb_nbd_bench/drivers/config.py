@@ -1,8 +1,7 @@
 import itertools as it
 import logging
-
-from typing import Iterator, NotRequired, TypedDict
-
+from collections.abc import Iterator
+from typing import NotRequired, TypedDict
 
 logger = logging.getLogger(__name__)
 

@@ -1,10 +1,7 @@
-from contextlib import contextmanager
-
 import logging
-
 import subprocess
-from typing import Iterator
-
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 

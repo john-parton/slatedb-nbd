@@ -4,9 +4,7 @@ version = "0.1.0"
 description = "Benchmarking tool for SlateDB NBD projects"
 readme = "README.md"
 requires-python = ">=3.12.3"
-dependencies = [
-    "httpx>=0.28.1",
-]
+dependencies = ["httpx>=0.28.1"]
 
 [project.scripts]
 slatedb_nbd_bench = "slatedb_nbd_bench.cli:cli"
@@ -16,6 +14,16 @@ requires = ["uv_build>=0.8.5,<0.9.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
-dev = [
-    "ruff>=0.12.7",
-]
+dev = ["ruff>=0.12.7"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = ["ISC001", "COM812"]
+fixable = ["ALL"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"

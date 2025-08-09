@@ -1,12 +1,10 @@
-import re
 import logging
-
+import re
 import subprocess
 import sys
 import time
 
 from slatedb_nbd_bench.bencher import Bencher
-
 
 logger = logging.getLogger(__name__)
 

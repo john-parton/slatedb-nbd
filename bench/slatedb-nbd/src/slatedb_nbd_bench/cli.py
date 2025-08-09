@@ -1,11 +1,11 @@
 import argparse
-from contextlib import ExitStack
-
 import json
 import logging
 import os
-
 import subprocess
+from contextlib import ExitStack
+
+import typer
 
 from slatedb_nbd_bench.bencher import Bencher
 from slatedb_nbd_bench.drivers.config import get_text_matrix
@@ -14,7 +14,7 @@ from slatedb_nbd_bench.drivers.zerofs import setup_plan9, zerofs_background
 from slatedb_nbd_bench.nbd import temporary_nbd_device
 from slatedb_nbd_bench.object_storage import empty_bucket
 from slatedb_nbd_bench.stats import RunningGeometricStats
-from slatedb_nbd_bench.tests import bench_scrub, bench_snapshot, bench_sync, bench_trim
+from slatedb_nbd_bench.tests import bench_snapshot, bench_sync
 from slatedb_nbd_bench.tests.files import (
     bench_linux_kernel_source_extraction,
     bench_sparse,
@@ -22,7 +22,6 @@ from slatedb_nbd_bench.tests.files import (
 )
 from slatedb_nbd_bench.working_dir import push_pop_cwd
 from slatedb_nbd_bench.zfs import temporary_zfs
-
 
 logger = logging.getLogger(__name__)
 
@@ -80,12 +79,25 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
 add_arguments(parser)
 
 
+app = typer.Typer()
+
+
+@app.command()
+def hello(name: str):
+    print(f"Hello {name}")
+
+
+@app.command()
+def goodbye(name: str, formal: bool = False):
+    if formal:
+        print(f"Goodbye Ms. {name}. Have a good day.")
+    else:
+        print(f"Bye {name}!")
+
+
 def cli():
     """Main CLI function to run the benchmarks."""
-
     args = parser.parse_args()
-
-    assert False, args
 
     results = []
 

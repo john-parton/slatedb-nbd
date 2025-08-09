@@ -1,9 +1,8 @@
-from contextlib import contextmanager
-
-from dataclasses import dataclass, field
-
 import time
-from typing import Iterator, TypedDict
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from typing import TypedDict
 
 
 class _BenchResult(TypedDict):

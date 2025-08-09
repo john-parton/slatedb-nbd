@@ -1,17 +1,14 @@
 # These tests do not work at the time of writing
 
-from contextlib import contextmanager
-
 import logging
 import os
 import secrets
-
 import subprocess
 import time
-from typing import Iterator
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from slatedb_nbd_bench.bencher import Bencher
-
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +23,6 @@ def postgres_container(
     """Context manager to run a PostgreSQL container.
     The container is started at the start and stopped at the end.
     """
-
     suffix = secrets.token_hex(4)
 
     logger.info("Pulling PostgreSQL Docker image...")
@@ -120,7 +116,6 @@ def bench_postgres(
     Benchmarks PostgreSQL operations.
     This is a placeholder for the actual benchmarking logic.
     """
-
     pgbench_env = os.environ.copy()
     pgbench_env["PGPASSWORD"] = "secret"
 

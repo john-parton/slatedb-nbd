@@ -1,15 +1,14 @@
+import hashlib
 import logging
-
-from pathlib import Path
 import shutil
 import subprocess
+import tarfile
+import tempfile
+from pathlib import Path
 
 import httpx
 
-import tempfile
-import tarfile
 from slatedb_nbd_bench.bencher import Bencher
-import hashlib
 
 logger = logging.getLogger(__name__)
 

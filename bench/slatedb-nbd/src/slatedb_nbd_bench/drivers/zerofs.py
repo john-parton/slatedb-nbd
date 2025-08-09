@@ -1,12 +1,9 @@
-from contextlib import contextmanager
-
 import logging
 import os
-
 import subprocess
 import time
-from typing import Iterator
-
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +16,6 @@ def zerofs_background(
     Context manager to run ZeroFS in the background.
     The process is started at the start and killed at the end.
     """
-
     if wal_enabled is not None:
         raise NotImplementedError(
             "ZeroFS does not support manually enabling or disabling WAL."
@@ -52,7 +48,9 @@ def zerofs_background(
     # Check if 'ZeroFS' directory exists
     if not os.path.exists("ZeroFS"):
         logger.debug("Cloning ZeroFS repository...")
-        subprocess.run(["git", "clone", "git@github.com:Barre/ZeroFS.git", "ZeroFS"])
+        subprocess.run(
+            ["git", "clone", "git@github.com:Barre/ZeroFS.git", "ZeroFS"], check=False
+        )
         os.chdir("ZeroFS")
     else:
         os.chdir("ZeroFS")

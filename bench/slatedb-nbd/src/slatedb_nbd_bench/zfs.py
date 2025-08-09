@@ -1,13 +1,11 @@
-from contextlib import ExitStack, contextmanager
-
 import logging
 import os
 import secrets
-
 import subprocess
 import time
-from typing import Iterator, TypedDict
-
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
+from typing import TypedDict
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +25,6 @@ def temporary_zpool(
     Context manager to create a temporary ZFS pool.
     The pool is created at the start and destroyed at the end.
     """
-
     # Automatically generate a name
     name = f"testpool_{secrets.token_hex(4)}"
 
@@ -73,7 +70,6 @@ def temporary_zfs_dataset(
     Context manager to create a temporary ZFS dataset.
     The dataset is created at the start and destroyed at the end.
     """
-
     name = f"{pool}/{dataset}"
 
     mountpoint = f"/mnt/{name}"
@@ -90,7 +86,7 @@ def temporary_zfs_dataset(
         key = secrets.token_hex()
 
         # Write to file
-        with open(key_path, "wt") as key_file:
+        with open(key_path, "w") as key_file:
             key_file.write(key)
 
         options.extend(
@@ -158,7 +154,6 @@ def temporary_zfs(
     Context manager to create a temporary ZFS pool and dataset.
     The pool and dataset are created at the start and destroyed at the end.
     """
-
     with ExitStack() as stack:
         pool = stack.enter_context(
             temporary_zpool(device=device, ashift=ashift, slog_size=slog_size)

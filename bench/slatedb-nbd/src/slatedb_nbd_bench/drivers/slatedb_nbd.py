@@ -1,12 +1,9 @@
-from contextlib import contextmanager
-
 import logging
 import os
-
 import subprocess
 import time
-from typing import Iterator
-
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +18,6 @@ def slate_db_background(
     Context manager to run SlateDB in the background.
     The process is started at the start and killed at the end.
     """
-
     # Check if a process is already running
     existing_process = subprocess.run(
         ["pgrep", "-f", "^target/release/slatedb_nbd$"],
