@@ -57,6 +57,9 @@ def zerofs_background(
         logger.debug("Pulling latest changes for ZeroFS repository...")
         subprocess.run(["git", "pull"], check=True)
 
+    # Actual code is in a subdirectory as of https://github.com/Barre/ZeroFS/commit/c443021c0c5c63b0475ef6c8f8de495f3d395bc6
+    os.chdir("zerofs")
+
     # Build ZeroFS in release mode
     logger.debug("Building ZeroFS in release mode...")
     subprocess.run(
