@@ -45,7 +45,7 @@ def temporary_zpool(
         # Create a file for the SLOG device
         slog_device = f"/tmp/{name}_slog"
         logger.debug(f"Creating SLOG device {slog_device} with size {slog_size}...")
-        subprocess.run(["fallocate", "-l", str(slog_size), slog_device], check=True)
+        subprocess.run(["fallocate", "-l", f"{slog_size}GB", slog_device], check=True)
         logger.debug(f"Attaching SLOG device {slog_device} to pool {name}...")
         subprocess.run(["sudo", "zpool", "add", name, "log", slog_device], check=True)
 
@@ -65,6 +65,7 @@ def temporary_zfs_dataset(
     dataset: str = "test",
     encryption: bool = False,
     compression: str | None = None,
+    zfs_sync: str | None = None,
 ):
     """
     Context manager to create a temporary ZFS dataset.
@@ -102,6 +103,9 @@ def temporary_zfs_dataset(
 
     if compression:
         options.extend(["-o", f"compression={compression}"])
+
+    if zfs_sync:
+        options.extend(["-o", f"sync={zfs_sync}"])
 
     logger.debug(f"Creating ZFS dataset {name}...")
     subprocess.run(["sudo", "zfs", "create", *options, name], check=True)
@@ -148,6 +152,7 @@ def temporary_zfs(
     slog_size: int | None = None,
     encryption: bool = False,
     compression: str | None = None,
+    zfs_sync: str | None = None,
     dataset: str = "test",
 ) -> Iterator[Info]:
     """
@@ -164,6 +169,7 @@ def temporary_zfs(
                 dataset=dataset,
                 encryption=encryption,
                 compression=compression,
+                zfs_sync=zfs_sync,
             )
         )
 

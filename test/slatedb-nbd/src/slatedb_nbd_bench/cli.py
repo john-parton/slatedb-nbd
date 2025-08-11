@@ -58,6 +58,15 @@ class Compression(str, Enum):
         return self.value
 
 
+class ZFSSync(str, Enum):
+    disabled = "disabled"
+    standard = "standard"
+    always = "always"
+
+    def __str__(self):
+        return self.value
+
+
 @app.command()
 def bench(
     *,
@@ -85,9 +94,21 @@ def bench(
     test_object_store_cache: Annotated[
         bool, typer.Option(help="Enable object store caching tests for SlateDB.")
     ] = False,
+    test_zfs_sync: Annotated[
+        bool, typer.Option(help="Enable ZFS sync tests for SlateDB.")
+    ] = False,
+    zfs_slog: Annotated[
+        int | None, typer.Option(help="Set ZFS slog to specified size in gigabytes.")
+    ] = None,
 ):
     wal_enabled = [True, False] if test_wal_enabled else [None]
     object_store_cache = [True, False] if test_object_store_cache else [None]
+    zfs_sync = (
+        [ZFSSync.disabled, ZFSSync.standard, ZFSSync.always]
+        if test_zfs_sync
+        else [None]
+    )
+    slog_size = [zfs_slog]
 
     results = []
 
@@ -97,6 +118,8 @@ def bench(
         connections=connections,
         wal_enabled=wal_enabled,
         object_store_cache=object_store_cache,
+        zfs_sync=zfs_sync,
+        slog_size=slog_size,
     ):
         print("=" * 40)
         print("Starting new test run.")
@@ -161,6 +184,7 @@ def bench(
                     slog_size=test.get("slog_size"),
                     encryption=test.get("encryption"),
                     compression=test.get("compression"),
+                    zfs_sync=test.get("zfs_sync"),
                 )
             )
 
@@ -237,6 +261,7 @@ def bench(
         "connections",
         "wal_enabled",
         "object_store_cache",
+        "zfs_sync",
     ]
 
     for test_condition in test_parameters:

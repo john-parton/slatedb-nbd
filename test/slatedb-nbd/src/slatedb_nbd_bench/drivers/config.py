@@ -20,6 +20,7 @@ class _TestConfig(TypedDict):
     object_store_cache: NotRequired[
         bool | None
     ]  # Whether to enable object store caching for SlateDB NBD
+    zfs_sync: NotRequired[str | None]
 
 
 DRIVER_DEFAULTS = {
@@ -40,7 +41,9 @@ def get_text_matrix(
     compression: list[str],
     connections: list[int],
     wal_enabled: list[bool],
-    object_store_cache: list[bool],
+    object_store_cache: list[bool | None],
+    zfs_sync: list[str | None],
+    slog_size: list[int | None],
 ) -> Iterator[_TestConfig]:
     conf = it.product(
         drivers,
@@ -48,6 +51,8 @@ def get_text_matrix(
         connections,
         wal_enabled,
         object_store_cache,
+        zfs_sync,
+        slog_size,
     )
 
     for (
@@ -56,6 +61,8 @@ def get_text_matrix(
         case_connections,
         case_wal_enabled,
         case_object_store_cache,
+        case_zfs_sync,
+        case_zfs_slog,
     ) in conf:
         yield {
             **DRIVER_DEFAULTS.get(case_driver, {}),
@@ -64,4 +71,6 @@ def get_text_matrix(
             "connections": case_connections,
             "wal_enabled": case_wal_enabled,
             "object_store_cache": case_object_store_cache,
+            "zfs_sync": case_zfs_sync,
+            "slog_size": case_zfs_slog,
         }
