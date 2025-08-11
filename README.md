@@ -13,6 +13,9 @@ The project provides a simple, efficient, and reliable way to use SlateDB's stor
 capabilities with standard filesystem tools and applications that expect block device
 interfaces.
 
+Note: The overall design is considered stable, but it is not recommended to use this
+project for data that cannot be reproduced at this time.
+
 ## Features
 
 - Exposes SlateDB as a standard Linux block device via NBD
