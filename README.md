@@ -47,10 +47,12 @@ Configuration of slatedb-nbd is done through environmental variables. Where poss
 reasonable defaults are implemented, but it is required that you define variables to
 describe your S3-compatible storage:
 
+```
 AWS_ENDPOINT=
 AWS_ACCESS_KEY_ID=
 AWS_SECRET_ACCESS_KEY=
 AWS_BUCKET_NAME=
+```
 
 ## Usage
 
