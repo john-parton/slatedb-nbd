@@ -112,6 +112,9 @@ def bench(
 
     results = []
 
+    # Ask for sudo pass right away
+    subprocess.run(["sudo", "echo", "Thanks"], check=True)
+
     for test in get_text_matrix(
         drivers=drivers,
         compression=compression,

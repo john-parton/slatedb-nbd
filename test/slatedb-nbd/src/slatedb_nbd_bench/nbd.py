@@ -52,18 +52,16 @@ def temporary_nbd_device(
     if connections is not None:
         options.append(f"-c{connections}")
 
-    if device_name is not None:
-        options.extend(["-n", device_name])
-
     logger.debug(f"Connecting NBD device {device} on port {port}...")
     subprocess.run(
         [
             "sudo",
             "nbd-client",
-            *options,
+            *(["-N", device_name] if device_name else []),
             "127.0.0.1",
             str(port),
             device,
+            *options,
         ],
         check=True,
     )

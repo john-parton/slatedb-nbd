@@ -57,10 +57,6 @@ def zerofs_background(
         logger.debug("Pulling latest changes for ZeroFS repository...")
         subprocess.run(["git", "pull"], check=True)
 
-    # Checkout '5663062'
-    # Current HEAD doesn't work at time of writing
-    subprocess.run(["git", "checkout", "5663062"], check=True)
-
     # Build ZeroFS in release mode
     logger.debug("Building ZeroFS in release mode...")
     subprocess.run(
