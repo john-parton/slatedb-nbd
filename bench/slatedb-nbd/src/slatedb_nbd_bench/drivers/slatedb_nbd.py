@@ -1,5 +1,6 @@
 import logging
 import os
+import secrets
 import subprocess
 import time
 from collections.abc import Iterator
@@ -48,8 +49,9 @@ def slate_db_background(
 
     # The presence of 'root_folder' determines whether the cache is on or off
     if object_store_cache is True:
+        suffix = secrets.token_hex(4)
         slate_db_env["SLATEDB_OBJECT_STORE_CACHE_OPTIONS"] = (
-            '{root_folder=/tmp/slatedb-object-store-cache,max_cache_size_bytes=17179869184,part_size_bytes=4194304,scan_interval="1h"}'
+            f'{{root_folder=/tmp/slatedb-object-store-cache_{suffix},max_cache_size_bytes=17179869184,part_size_bytes=4194304,scan_interval="1h"}}'
         )
     elif object_store_cache is False:
         slate_db_env["SLATEDB_OBJECT_STORE_CACHE_OPTIONS"] = (

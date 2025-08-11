@@ -219,14 +219,15 @@ def bench(
         if len(values) > 1:
             results_map = {value: RunningGeometricStats() for value in values}
 
-            for test in result["tests"]:
-                results_map[result["config"][key]].push(test["elapsed"])
+            for result in results:
+                stats = results_map[result["config"][key]]
+                for test in result["tests"]:
+                    stats.push(test["elapsed"])
 
             print("=" * 40)
             print(f"Comparing {key}")
-            for value in values:
-                stats = results_map[value]
-                print(f"Value: {value}")
+            for key, stats in results_map.items():
+                print(f"Value: {key}")
                 print(f"  Geometric Mean: {stats.mean}")
                 print(f"  Geometric Standard Deviation: {stats.standard_deviation}")
 
