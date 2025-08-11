@@ -13,7 +13,8 @@ def slate_db_background(
     *,
     automatically_kill: bool = True,
     wal_enabled: bool | None = None,
-) -> Iterator[subprocess.Popen]:
+    object_store_cache: bool | None = None,
+) -> Iterator[None]:
     """
     Context manager to run SlateDB in the background.
     The process is started at the start and killed at the end.
@@ -45,6 +46,17 @@ def slate_db_background(
     if wal_enabled is not None:
         slate_db_env["SLATEDB_WAL_ENABLED"] = "true" if wal_enabled else "false"
 
+    # The presence of 'root_folder' determines whether the cache is on or off
+    if object_store_cache is True:
+        slate_db_env["SLATEDB_OBJECT_STORE_CACHE_OPTIONS"] = (
+            '{root_folder=/tmp/slatedb-object-store-cache,max_cache_size_bytes=17179869184,part_size_bytes=4194304,scan_interval="1h"}'
+        )
+    elif object_store_cache is False:
+        slate_db_env["SLATEDB_OBJECT_STORE_CACHE_OPTIONS"] = (
+            '{root_folder=None,max_cache_size_bytes=17179869184,part_size_bytes=4194304,scan_interval="1h"}'
+        )
+    # else default
+
     # Build SlateDB in release mode
     logger.debug("Building SlateDB in release mode...")
     subprocess.run(
@@ -63,7 +75,7 @@ def slate_db_background(
         logger.debug("Waiting for SlateDB NBD server to start...")
         time.sleep(5)
         logger.debug("SlateDB NBD server started successfully.")
-        yield process  # Yield control to the block of code using this context manager
+        yield  # Yield control to the block of code using this context manager
     finally:
         logger.debug("Stopping SlateDB NBD server...")
         # Kill the SlateDB process

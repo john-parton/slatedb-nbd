@@ -1,13 +1,14 @@
-import argparse
 import json
 import logging
 import os
 import subprocess
 from contextlib import ExitStack
+from enum import Enum
+from typing import Annotated
 
 import typer
 
-from slatedb_nbd_bench.bencher import Bencher
+from slatedb_nbd_bench.bencher import Bencher, bench_print
 from slatedb_nbd_bench.drivers.config import get_text_matrix
 from slatedb_nbd_bench.drivers.slatedb_nbd import slate_db_background
 from slatedb_nbd_bench.drivers.zerofs import setup_plan9, zerofs_background
@@ -32,82 +33,70 @@ logging.basicConfig(
 )
 
 
-parser = argparse.ArgumentParser(
-    description="Run benchmarks for SlateDB NBD and ZeroFS with various configurations."
-)
-
-
-def add_arguments(parser: argparse.ArgumentParser) -> None:
-    """
-    Add command line arguments to the parser.
-    """
-    # Should probably move 'bench plan 9' to drivers
-    parser.add_argument(
-        "--bench-plan-9",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-    )
-    parser.add_argument(
-        "--drivers",
-        nargs="+",
-        choices=["slatedb-nbd", "zerofs", "zerofs-plan9"],
-        default=["slatedb-nbd"],
-        help="Specify which drivers to run benchmarks for. Default is slatdb-nbd only.",
-    )
-    parser.add_argument(
-        "--compression",
-        nargs="+",
-        choices=["off", "zstd-fast", "zstd"],
-        default=["zstd"],
-        help="Specify the compression algorithms to use. Default is zstd.",
-    )
-    parser.add_argument(
-        "--connections",
-        nargs="+",
-        type=int,
-        default=[1],
-        help="Specify the number of connections to use for benchmarks. Default is 1.",
-    )
-    parser.add_argument(
-        "--test-wal-enabled",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Enable WAL tests for SlateDB. Default is False.",
-    )
-
-
-add_arguments(parser)
-
-
-app = typer.Typer()
+app = typer.Typer(help="Command line interface for SlateDB NBD tests and benchmarking.")
 
 
 @app.command()
-def hello(name: str):
-    print(f"Hello {name}")
+def test():
+    # Run end-to-end or integration tests
+    pass
+
+
+class Drivers(str, Enum):
+    slatedb_nbd = "slatedb-nbd"
+    zerofs = "zerofs"
+    zerofs_plan9 = "zerofs-plan9"
+
+
+class Compression(str, Enum):
+    off = "off"
+    zstd_fast = "zstd-fast"
+    zstd = "zstd"
+
+    # This is directly interpolated in CLI arguments
+    def __str__(self):
+        return self.value
 
 
 @app.command()
-def goodbye(name: str, formal: bool = False):
-    if formal:
-        print(f"Goodbye Ms. {name}. Have a good day.")
-    else:
-        print(f"Bye {name}!")
-
-
-def cli():
-    """Main CLI function to run the benchmarks."""
-    args = parser.parse_args()
+def bench(
+    *,
+    drivers: Annotated[
+        list[Drivers],
+        typer.Option(
+            help="Specify drivers to test.",
+        ),
+    ] = [Drivers.slatedb_nbd],  # noqa: B006
+    compression: Annotated[
+        list[Compression],
+        typer.Option(
+            help="Specify the compression algorithms to test.",
+        ),
+    ] = [Compression.zstd],  # noqa: B006
+    connections: Annotated[
+        list[int],
+        typer.Option(
+            help="Specify the number of connections to test.",
+        ),
+    ] = [1],  # noqa: B006
+    test_wal_enabled: Annotated[
+        bool, typer.Option(help="Enable WAL tests for SlateDB.")
+    ] = False,
+    test_object_store_cache: Annotated[
+        bool, typer.Option(help="Enable object store caching tests for SlateDB.")
+    ] = False,
+):
+    wal_enabled = [True, False] if test_wal_enabled else [None]
+    object_store_cache = [True, False] if test_object_store_cache else [None]
 
     results = []
 
-    wal_enabled = [True, False] if args.test_wal_enabled else [None]
-
     for test in get_text_matrix(
-        drivers=args.drivers,
-        compression=args.compression,
-        connections=args.connections,
+        drivers=drivers,
+        compression=compression,
+        connections=connections,
         wal_enabled=wal_enabled,
+        object_store_cache=object_store_cache,
     ):
         print("=" * 40)
         print("Starting new test run.")
@@ -121,6 +110,9 @@ def cli():
             # This driver is quite different, so we handle it separately.
             if test["driver"] == "zerofs-plan9":
                 # ZeroFS for plan 9
+                # Need to pass:
+                # * wal_enabled
+                # * object_store_cache
                 stack.enter_context(zerofs_background())
 
                 # Plan 9
@@ -143,8 +135,16 @@ def cli():
 
             # Start the SlateDB NBD server in the background
             if test["driver"] == "slatedb-nbd":
-                stack.enter_context(slate_db_background())
+                stack.enter_context(
+                    slate_db_background(
+                        wal_enabled=test.get("wal_enabled"),
+                        object_store_cache=test.get("object_store_cache"),
+                    )
+                )
             elif test["driver"] == "zerofs":
+                # Need to pass:
+                # * wal_enabled
+                # * object_store_cache
                 stack.enter_context(zerofs_background())
             else:
                 raise ValueError(f"Unknown driver: {test['driver']}")
@@ -164,7 +164,7 @@ def cli():
                 )
             )
 
-            with bencher.bench("overall_test_duration"):
+            with bench_print("overall_test_duration"):
                 # Run the Linux kernel source extraction benchmark
                 bench_linux_kernel_source_extraction(bencher=bencher)
 
@@ -202,25 +202,24 @@ def cli():
     for result in results:
         stats = RunningGeometricStats()
         for test in result["tests"]:
-            # Don't double count this one
-            if test["label"] == "overall_test_duration":
-                continue
             stats.push(test["elapsed"])
         result["summary"] = {
-            "geometric_mean": stats.geometric_mean(),
-            "geometric_standard_deviation": stats.geometric_standard_deviation(),
+            "geometric_mean": stats.mean,
+            "geometric_standard_deviation": stats.standard_deviation,
         }
         print(json.dumps(result, indent=2))
 
-    def compare(key):
-        values = getattr(args, key)
+    def compare(key: str):
+        values = set()
+        for result in results:
+            values.add(result["config"][key])
+
+        values = sorted(values)
 
         if len(values) > 1:
             results_map = {value: RunningGeometricStats() for value in values}
 
             for test in result["tests"]:
-                if test["label"] == "overall_test_duration":
-                    continue
                 results_map[result["config"][key]].push(test["elapsed"])
 
             print("=" * 40)
@@ -228,33 +227,16 @@ def cli():
             for value in values:
                 stats = results_map[value]
                 print(f"Value: {value}")
-                print(f"  Geometric Mean: {stats.geometric_mean()}")
-                print(
-                    f"  Geometric Standard Deviation: {stats.geometric_standard_deviation()}"
-                )
+                print(f"  Geometric Mean: {stats.mean}")
+                print(f"  Geometric Standard Deviation: {stats.standard_deviation}")
 
-    compare("driver")
-    compare("compression")
-    compare("connections")
+    test_parameters = [
+        "driver",
+        "compression",
+        "connections",
+        "wal_enabled",
+        "object_store_cache",
+    ]
 
-    if len(wal_enabled) > 1:
-        results_map = {enabled: RunningGeometricStats() for enabled in wal_enabled}
-        for result in results:
-            for test in result["tests"]:
-                if test["label"] == "overall_test_duration":
-                    continue
-                results_map[result["config"]["wal_enabled"]].push(test["elapsed"])
-
-        print("=" * 40)
-        print("Comparing wal_enabled")
-        for value in wal_enabled:
-            stats = results_map[value]
-            print(f"Value: {value}")
-            print(f"  Geometric Mean: {stats.geometric_mean()}")
-            print(
-                f"  Geometric Standard Deviation: {stats.geometric_standard_deviation()}"
-            )
-
-
-if __name__ == "__main__":
-    cli()
+    for test_condition in test_parameters:
+        compare(test_condition)

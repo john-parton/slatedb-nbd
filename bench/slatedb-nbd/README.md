@@ -24,7 +24,7 @@ The tests run involve creating and destroying ZFS pools. It's unlikely that ther
 be any data loss, as all test pools includes an underscore followed by 4 random hex
 digits.
 
-However, the device `/dev/nbd6` is unmounted and mounted many times. Ensure you do not
+However, the device `/dev/nbd5` is unmounted and mounted many times. Ensure you do not
 have anything using that device.
 
 ## Install Depenencies

@@ -37,6 +37,7 @@ async fn main() -> std::io::Result<()> {
 
     info!("Using SlateDB settings: {:?}", settings);
 
+    // TODO Make object store configurable.
     let object_store: Arc<dyn ObjectStore> = Arc::new(
         object_store::aws::AmazonS3Builder::new()
             // These will be different if you are using real AWS

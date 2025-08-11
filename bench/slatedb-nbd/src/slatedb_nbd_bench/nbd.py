@@ -11,7 +11,7 @@ def temporary_nbd_device(
     *,
     port: int = 10809,
     block_size: int | None = None,
-    device_index: int = 6,
+    device_index: int = 5,
     automatically_disconnect: bool = True,
     connections: int | None = None,
 ) -> Iterator[str]:

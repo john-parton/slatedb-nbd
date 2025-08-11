@@ -8,6 +8,7 @@ use thiserror::Error;
 use tokio_nbd::device::NbdDriver;
 use tokio_nbd::errors::{OptionReplyError, ProtocolError};
 use tokio_nbd::flags::{CommandFlags, ServerFeatures};
+use tracing::error;
 
 // Constants for defaults
 const DEFAULT_BLOCK_SIZE: u64 = 4096; // 4 KiB - Block size is now fixed
@@ -103,21 +104,26 @@ impl SlateDbDriver {
         })
     }
 
-    fn block_align(&self, address: u64) -> Result<u64, ProtocolError> {
-        if address % self.block_size as u64 != 0 {
-            dbg!(
+    // Helper method to check if an address is valid for the device
+    fn check_address_valid(&self, address: u64) -> Result<(), ProtocolError> {
+        if address % self.block_size != 0 {
+            error!(
                 "Address {} is not aligned to block size {}",
-                address,
-                self.block_size
+                address, self.block_size
             );
             return Err(ProtocolError::CommandNotSupported);
         }
         if address
             >= (self.device_size.load(Ordering::Acquire) + Self::RESERVED_BLOCKS * self.block_size)
         {
+            error!(
+                "Address {} exceeds device size {}",
+                address,
+                self.device_size.load(Ordering::Acquire)
+            );
             return Err(ProtocolError::CommandNotSupported);
         }
-        Ok(Self::RESERVED_BLOCKS + address / self.block_size)
+        Ok(())
     }
 
     fn block_to_key(block: u64) -> [u8; 8] {
@@ -205,9 +211,14 @@ impl NbdDriver for SlateDbDriver {
         offset: u64,
         length: u32,
     ) -> Result<Vec<u8>, ProtocolError> {
-        // Block logic is copied here, should be refactored later
-        let start_block = self.block_align(offset)?;
-        let end_block = self.block_align(offset + length as u64)?;
+        // Ensure offset is valid
+        self.check_address_valid(offset)?;
+
+        // Calculate block indices
+        let start_block = offset / self.block_size + Self::RESERVED_BLOCKS;
+        // Calculate end block - need to ensure we have enough blocks to cover the entire length
+        let blocks_needed = (length as u64 + self.block_size - 1) / self.block_size; // Ceiling division
+        let end_block = start_block + blocks_needed;
         let mut buff = Vec::<u8>::with_capacity(length as usize);
 
         // println!(
@@ -220,9 +231,9 @@ impl NbdDriver for SlateDbDriver {
                 Some(data) => {
                     // write
                     if data.len() != self.block_size as usize {
-                        dbg!(
-                            "Data {:?} does not match block size {}",
-                            data,
+                        error!(
+                            "Data length {} does not match block size {}",
+                            data.len(),
                             self.block_size
                         );
                         return Err(ProtocolError::InvalidArgument);
@@ -237,7 +248,18 @@ impl NbdDriver for SlateDbDriver {
             }
         }
 
-        if buff.len() != length as usize {
+        // We might have read more data than needed due to block alignment
+        // Trim the buffer to match the requested length exactly
+        if buff.len() > length as usize {
+            // Truncate the buffer to the requested length
+            buff.truncate(length as usize);
+        } else if buff.len() < length as usize {
+            // If we have less data than requested, this is an error condition
+            error!(
+                "Buffer length {} is less than requested length {}",
+                buff.len(),
+                length
+            );
             return Err(ProtocolError::InvalidArgument);
         }
 
@@ -250,10 +272,20 @@ impl NbdDriver for SlateDbDriver {
         offset: u64,
         data: Vec<u8>,
     ) -> Result<(), ProtocolError> {
-        let start_block = self.block_align(offset)?;
+        // Ensure offset is valid
+        self.check_address_valid(offset)?;
 
-        // Check if the data length is a multiple of BLOCK_SIZE
-        self.block_align(data.len() as u64)?;
+        // Ensure data length is a multiple of block size
+        if data.len() % self.block_size as usize != 0 {
+            error!(
+                "Data length {} is not a multiple of block size {}",
+                data.len(),
+                self.block_size
+            );
+            return Err(ProtocolError::InvalidArgument);
+        }
+
+        let start_block = offset / self.block_size + Self::RESERVED_BLOCKS;
 
         let mut batch = WriteBatch::new();
 
@@ -285,8 +317,14 @@ impl NbdDriver for SlateDbDriver {
         offset: u64,
         length: u32,
     ) -> Result<(), ProtocolError> {
-        let start_block = self.block_align(offset)?;
-        let end_block = self.block_align(offset + length as u64)?;
+        // Ensure offset is valid
+        self.check_address_valid(offset)?;
+
+        // Calculate block indices
+        let start_block = offset / self.block_size + Self::RESERVED_BLOCKS;
+        // Calculate end block - ensure we have enough blocks to cover the entire length
+        let blocks_needed = (length as u64 + self.block_size - 1) / self.block_size; // Ceiling division
+        let end_block = start_block + blocks_needed;
 
         self.delete_range(start_block, end_block, flags.contains(CommandFlags::FUA))
             .await
@@ -299,9 +337,14 @@ impl NbdDriver for SlateDbDriver {
         length: u32,
     ) -> Result<(), ProtocolError> {
         // TODO Handle fast zero flag
-        // Implementation goes here
-        let start_block = self.block_align(offset)?;
-        let end_block = self.block_align(offset + length as u64)?;
+        // Ensure offset is valid
+        self.check_address_valid(offset)?;
+
+        // Calculate block indices
+        let start_block = offset / self.block_size + Self::RESERVED_BLOCKS;
+        // Calculate end block - ensure we have enough blocks to cover the entire length
+        let blocks_needed = (length as u64 + self.block_size - 1) / self.block_size; // Ceiling division
+        let end_block = start_block + blocks_needed;
 
         self.delete_range(start_block, end_block, flags.contains(CommandFlags::FUA))
             .await
@@ -316,5 +359,232 @@ impl NbdDriver for SlateDbDriver {
 
     fn get_name(&self) -> String {
         "SlateDB NBD Driver".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::driver_slatedb::SlateDbDriver;
+    use slatedb::Db;
+    use slatedb::object_store::{ObjectStore, memory::InMemory};
+    use std::sync::Arc;
+    use tokio_nbd::device::NbdDriver;
+    use tokio_nbd::flags::CommandFlags;
+
+    // Helper function to create an in-memory SlateDbDriver for testing
+    async fn create_test_driver() -> SlateDbDriver {
+        let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let kv_store = Db::open("/tmp/test_kv_store", object_store)
+            .await
+            .expect("failed to create test kv store");
+        let driver = SlateDbDriver::try_from_db(kv_store).await.unwrap();
+        driver
+    }
+
+    // The original bug was related to buffer length not matching requested length
+    // This was due to incorrect calculation of end_block when reading data
+
+    #[tokio::test]
+    async fn test_read_with_exact_block_size() {
+        // This test verifies that reading with a length that's exactly a multiple of the block size works correctly
+        let driver = create_test_driver().await;
+
+        // Write data to the device (4096 bytes = 1 block)
+        let data = vec![0x42; 4096];
+        driver
+            .write(CommandFlags::empty(), 0, data.clone())
+            .await
+            .unwrap();
+
+        // Read back the same amount of data
+        let read_data = driver.read(CommandFlags::empty(), 0, 4096).await.unwrap();
+
+        // Verify the data is what we expect
+        assert_eq!(
+            read_data.len(),
+            4096,
+            "Buffer length should match requested length"
+        );
+        assert_eq!(read_data, data, "Read data should match written data");
+    }
+
+    #[tokio::test]
+    async fn test_read_with_partial_block() {
+        // This test verifies that reading with a length that's not a multiple of the block size works correctly
+        // The fix should handle this by reading the whole block but returning only the requested amount
+        let driver = create_test_driver().await;
+
+        // Write a full block (4096 bytes)
+        let data = vec![0x42; 4096];
+        driver
+            .write(CommandFlags::empty(), 0, data.clone())
+            .await
+            .unwrap();
+
+        // Read only a portion of the block (e.g., 2048 bytes)
+        let read_data = driver.read(CommandFlags::empty(), 0, 2048).await.unwrap();
+
+        // Verify the data is what we expect
+        assert_eq!(
+            read_data.len(),
+            2048,
+            "Buffer length should match requested length"
+        );
+        assert_eq!(
+            read_data,
+            data[0..2048],
+            "Read data should match the first half of the written data"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_spanning_multiple_blocks() {
+        // This test verifies that reading across block boundaries works correctly
+        let driver = create_test_driver().await;
+
+        // Write 2 blocks of data (8192 bytes)
+        let data = vec![0x42; 8192];
+        driver
+            .write(CommandFlags::empty(), 0, data.clone())
+            .await
+            .unwrap();
+
+        // Read data spanning both blocks but not the full two blocks (e.g., 6144 bytes)
+        let read_data = driver.read(CommandFlags::empty(), 0, 6144).await.unwrap();
+
+        // Verify the data is what we expect
+        assert_eq!(
+            read_data.len(),
+            6144,
+            "Buffer length should match requested length"
+        );
+        assert_eq!(
+            read_data,
+            data[0..6144],
+            "Read data should match the first 6144 bytes of written data"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_unaligned_length() {
+        // This test verifies that reading an unaligned length works correctly
+        let driver = create_test_driver().await;
+
+        // Write 2 blocks of data (8192 bytes)
+        let data = vec![0x42; 8192];
+        driver
+            .write(CommandFlags::empty(), 0, data.clone())
+            .await
+            .unwrap();
+
+        // Read an odd amount of data that doesn't align with block size (e.g., 5000 bytes)
+        let read_data = driver.read(CommandFlags::empty(), 0, 5000).await.unwrap();
+
+        // Verify the data is what we expect
+        assert_eq!(
+            read_data.len(),
+            5000,
+            "Buffer length should match requested length"
+        );
+        assert_eq!(
+            read_data,
+            data[0..5000],
+            "Read data should match the first 5000 bytes of written data"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_with_offset() {
+        // This test verifies that reading with an offset works correctly
+        let driver = create_test_driver().await;
+
+        // Write 3 blocks of data (12288 bytes)
+        let data = vec![0x42; 12288];
+        driver
+            .write(CommandFlags::empty(), 0, data.clone())
+            .await
+            .unwrap();
+
+        // Read from the middle of the data (offset of 4096 bytes, which is aligned to a block boundary)
+        let read_data = driver
+            .read(CommandFlags::empty(), 4096, 4096)
+            .await
+            .unwrap();
+
+        // Verify the data is what we expect
+        assert_eq!(
+            read_data.len(),
+            4096,
+            "Buffer length should match requested length"
+        );
+        assert_eq!(
+            read_data,
+            data[4096..8192],
+            "Read data should match the second block of written data"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_with_offset_and_unaligned_length() {
+        // This test specifically targets the original bug by combining offset with unaligned length
+        let driver = create_test_driver().await;
+
+        // Write 3 blocks of data (12288 bytes)
+        let data = vec![0x42; 12288];
+        driver
+            .write(CommandFlags::empty(), 0, data.clone())
+            .await
+            .unwrap();
+
+        // Read from the middle with an unaligned length
+        // This would have caused problems in the original implementation
+        let read_data = driver
+            .read(CommandFlags::empty(), 4096, 3000)
+            .await
+            .unwrap();
+
+        // Verify the data is what we expect
+        assert_eq!(
+            read_data.len(),
+            3000,
+            "Buffer length should match requested length"
+        );
+        assert_eq!(
+            read_data,
+            data[4096..7096],
+            "Read data should match the expected segment"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_large_offset_and_length() {
+        // This test verifies reading near the end of the device
+        let driver = create_test_driver().await;
+
+        // Write data at a high offset (e.g., 5 MB from the start)
+        let offset = 5 * 1024 * 1024; // 5 MB, must be block aligned
+        let data = vec![0x42; 8192]; // 2 blocks
+        driver
+            .write(CommandFlags::empty(), offset, data.clone())
+            .await
+            .unwrap();
+
+        // Read with an unaligned length
+        let read_data = driver
+            .read(CommandFlags::empty(), offset, 5000)
+            .await
+            .unwrap();
+
+        // Verify the data is what we expect
+        assert_eq!(
+            read_data.len(),
+            5000,
+            "Buffer length should match requested length"
+        );
+        assert_eq!(
+            read_data,
+            data[0..5000],
+            "Read data should match the expected segment"
+        );
     }
 }

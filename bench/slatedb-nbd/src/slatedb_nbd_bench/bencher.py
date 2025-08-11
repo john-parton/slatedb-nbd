@@ -10,6 +10,17 @@ class _BenchResult(TypedDict):
     elapsed: float
 
 
+@contextmanager
+def bench_print(label: str):
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        end = time.perf_counter()
+        elapsed = end - start
+        print(f"{label}: {elapsed:.6f} seconds")
+
+
 @dataclass
 class Bencher:
     results: list[_BenchResult] = field(default_factory=list)
