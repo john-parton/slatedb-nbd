@@ -126,8 +126,8 @@ Integration tests are run using python, in the `test` directory.
 ### Performance.
 
 In real-world tests where the object storage is not directly hosted on the test machine,
-zfs-on-slatedb via slatedb-nbd is roughly twice as fast as zfs-on-zerofs and roughly ten times faster
-than plan9-on-zerofs.
+zfs-on-slatedb via slatedb-nbd is roughly twice as fast as zfs-on-zerofs and roughly six
+times faster than plan9-on-zerofs.
 
 Comprehensive benchmarking tools are included so you can tune to your specific workload.
 
