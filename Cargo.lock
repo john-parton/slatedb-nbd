@@ -2483,7 +2483,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "slatedb_nbd"
+name = "slatedb-nbd"
 version = "0.1.0"
 dependencies = [
  "object_store",
