@@ -172,9 +172,14 @@ def bench(
             else:
                 raise ValueError(f"Unknown driver: {test['driver']}")
 
+            nbd_device_name = "device_10809" if test["driver"] == "zerofs" else None
+
             # Create a temporary NBD device
             nbd_device = stack.enter_context(
-                temporary_nbd_device(block_size=test.get("block_size"))
+                temporary_nbd_device(
+                    block_size=test.get("block_size"),
+                    device_name=nbd_device_name,
+                )
             )
 
             zfs = stack.enter_context(
