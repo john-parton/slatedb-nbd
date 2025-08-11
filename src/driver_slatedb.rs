@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 
 use slatedb::bytes::Bytes;
 use slatedb::config::WriteOptions;
