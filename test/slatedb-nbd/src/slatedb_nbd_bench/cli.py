@@ -40,17 +40,17 @@ app = typer.Typer(help="Command line interface for SlateDB NBD tests and benchma
 
 
 @contextmanager
-def zfs_on_nbd_driver(*, base_driver: Drivers, **kwargs):
+def zfs_on_nbd_driver(*, base_driver: Driver, **kwargs):
     # Start the SlateDB NBD server in the background
     with ExitStack() as stack:
-        if base_driver == "slatedb-nbd":
+        if base_driver == Driver.slatedb_nbd:
             stack.enter_context(
                 slate_db_background(
                     wal_enabled=kwargs.get("wal_enabled"),
                     object_store_cache=kwargs.get("object_store_cache"),
                 )
             )
-        elif base_driver == "zerofs":
+        elif base_driver == Driver.zerofs:
             # Need to pass:
             # * wal_enabled
             # * object_store_cache
@@ -92,7 +92,7 @@ def test():
     pass
 
 
-class Drivers(str, Enum):
+class Driver(str, Enum):
     slatedb_nbd = "slatedb-nbd"
     zerofs = "zerofs"
     zerofs_plan9 = "zerofs-plan9"
@@ -122,11 +122,11 @@ class ZFSSync(str, Enum):
 def bench(
     *,
     drivers: Annotated[
-        list[Drivers],
+        list[Driver],
         typer.Option(
             help="Specify drivers to test.",
         ),
-    ] = [Drivers.slatedb_nbd],  # noqa: B006
+    ] = [Driver.slatedb_nbd],  # noqa: B006
     compression: Annotated[
         list[Compression],
         typer.Option(
@@ -163,11 +163,7 @@ def bench(
     mcli_alias: Annotated[
         str,
         typer.Option(help=("Alias to use for MinIO cli operations.")),
-    ] = "truenas",
-    mcli_bucket: Annotated[
-        str,
-        typer.Option(help=("Bucket to use for MinIO cli operations.")),
-    ] = "zerofs",
+    ] = "slatedb-nbd",
 ):
     wal_enabled = [True, False] if test_wal_enabled else [None]
     object_store_cache = [True, False] if test_object_store_cache else [None]
@@ -185,14 +181,12 @@ def bench(
 
     # In order to give an apples-to-apples comparison, the ZFS specific tests are
     # disabled if one of the drivers doesn't support it
-    disable_zfs_tests: bool = (
-        Drivers.folder in drivers or Drivers.zerofs_plan9 in drivers
-    )
+    disable_zfs_tests: bool = Driver.folder in drivers or Driver.zerofs_plan9 in drivers
 
     # If the folder driver is being used, make sure that the test_folder option is passed
     # and explictly ask the user to confirm, because it is absolutely going to write
     # and delete data to that folder
-    if Drivers.folder in drivers:
+    if Driver.folder in drivers:
         if not test_folder:
             msg = "test_folder option must be specified when using folder driver"
             raise ValueError(msg)
@@ -204,6 +198,45 @@ def bench(
             ),
             abort=True,
         )
+
+    for key in (
+        "AWS_ENDPOINT",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_BUCKET_NAME",
+    ):
+        if key not in os.environ:
+            msg = f"Missing required environment variable: {key}"
+            raise ValueError(msg)
+
+    mcli_bucket = os.environ["AWS_BUCKET_NAME"]
+
+    # Confirm that the bucket is going to get nuked
+    if any(
+        s3_driver in drivers
+        for s3_driver in (Driver.slatedb_nbd, Driver.zerofs, Driver.zerofs_plan9)
+    ):
+        click.confirm(
+            (
+                f"You are about to run tests that will delete the bucket {mcli_bucket}. "
+                "Existing data in the bucket will be lost. Are you sure you want to continue?"
+            ),
+            abort=True,
+        )
+
+    # Set the mcli alias based on the current environmental variables
+    subprocess.run(
+        [
+            "mcli",
+            "alias",
+            "set",
+            mcli_alias,
+            os.environ["AWS_ENDPOINT"],
+            os.environ["AWS_ACCESS_KEY_ID"],
+            os.environ["AWS_SECRET_ACCESS_KEY"],
+        ],
+        check=True,
+    )
 
     for test in get_text_matrix(
         drivers=drivers,
