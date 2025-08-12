@@ -176,9 +176,6 @@ def bench(
 
     results = []
 
-    # Ask for sudo pass right away
-    subprocess.run(["sudo", "echo", "Thanks"], check=True)
-
     # In order to give an apples-to-apples comparison, the ZFS specific tests are
     # disabled if one of the drivers doesn't support it
     disable_zfs_tests: bool = Driver.folder in drivers or Driver.zerofs_plan9 in drivers
@@ -237,6 +234,9 @@ def bench(
         ],
         check=True,
     )
+
+    # Ask for sudo pass now. It will be needed soon
+    subprocess.run(["sudo", "echo", "Thanks"], check=True, stdout=subprocess.DEVNULL)
 
     for test in get_text_matrix(
         drivers=drivers,
