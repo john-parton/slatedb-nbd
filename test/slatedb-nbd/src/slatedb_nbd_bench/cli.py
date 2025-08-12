@@ -1,11 +1,14 @@
+from __future__ import annotations
+
 import json
 import logging
 import os
 import subprocess
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from enum import Enum
 from typing import Annotated
 
+import click
 import typer
 
 from slatedb_nbd_bench.bencher import Bencher, bench_print
@@ -36,6 +39,53 @@ logging.basicConfig(
 app = typer.Typer(help="Command line interface for SlateDB NBD tests and benchmarking.")
 
 
+@contextmanager
+def zfs_on_nbd_driver(*, base_driver: Drivers, **kwargs):
+    # Start the SlateDB NBD server in the background
+    with ExitStack() as stack:
+        if base_driver == "slatedb-nbd":
+            stack.enter_context(
+                slate_db_background(
+                    wal_enabled=kwargs.get("wal_enabled"),
+                    object_store_cache=kwargs.get("object_store_cache"),
+                )
+            )
+        elif base_driver == "zerofs":
+            # Need to pass:
+            # * wal_enabled
+            # * object_store_cache
+            stack.enter_context(zerofs_background())
+        else:
+            msg = f"Unknown driver: {base_driver}"
+            raise ValueError(msg)
+
+        nbd_device_name = "device_10809" if base_driver == "zerofs" else None
+
+        # Create a temporary NBD device
+        nbd_device = stack.enter_context(
+            temporary_nbd_device(
+                block_size=kwargs.get("block_size"),
+                device_name=nbd_device_name,
+            )
+        )
+
+        zfs = stack.enter_context(
+            temporary_zfs(
+                device=nbd_device,
+                ashift=kwargs.get("ashift"),
+                slog_size=kwargs.get("slog_size"),
+                encryption=kwargs.get("encryption"),
+                compression=kwargs.get("compression"),
+                zfs_sync=kwargs.get("zfs_sync"),
+            )
+        )
+
+        try:
+            yield zfs
+        finally:
+            pass
+
+
 @app.command()
 def test():
     # Run end-to-end or integration tests
@@ -46,6 +96,7 @@ class Drivers(str, Enum):
     slatedb_nbd = "slatedb-nbd"
     zerofs = "zerofs"
     zerofs_plan9 = "zerofs-plan9"
+    folder = "folder"
 
 
 class Compression(str, Enum):
@@ -100,6 +151,15 @@ def bench(
     zfs_slog: Annotated[
         int | None, typer.Option(help="Set ZFS slog to specified size in gigabytes.")
     ] = None,
+    test_folder: Annotated[
+        str | None,
+        typer.Option(
+            help=(
+                "Location of folder (local filesystem or other externally mounted fs) to test. "
+                "Required for folder driver."
+            )
+        ),
+    ] = None,
 ):
     wal_enabled = [True, False] if test_wal_enabled else [None]
     object_store_cache = [True, False] if test_object_store_cache else [None]
@@ -114,6 +174,28 @@ def bench(
 
     # Ask for sudo pass right away
     subprocess.run(["sudo", "echo", "Thanks"], check=True)
+
+    # In order to give an apples-to-apples comparison, the ZFS specific tests are
+    # disabled if one of the drivers doesn't support it
+    disable_zfs_tests: bool = (
+        Drivers.folder in drivers or Drivers.zerofs_plan9 in drivers
+    )
+
+    # If the folder driver is being used, make sure that the test_folder option is passed
+    # and explictly ask the user to confirm, because it is absolutely going to write
+    # and delete data to that folder
+    if Drivers.folder in drivers:
+        if not test_folder:
+            msg = "test_folder option must be specified when using folder driver"
+            raise ValueError(msg)
+
+        click.confirm(
+            (
+                f"You are about to run tests that will write to the folder at {test_folder}. "
+                "Existing data in the folder may be lost. Are you sure you want to continue?"
+            ),
+            abort=True,
+        )
 
     for test in get_text_matrix(
         drivers=drivers,
@@ -144,7 +226,7 @@ def bench(
                 # Plan 9
                 stack.enter_context(setup_plan9())
 
-                with bencher.bench("overall_test_duration"):
+                with bench_print("overall_test_duration"):
                     # Run the Linux kernel source extraction benchmark
                     bench_linux_kernel_source_extraction(bencher=bencher)
 
@@ -159,21 +241,24 @@ def bench(
 
                 continue
 
-            # Start the SlateDB NBD server in the background
-            if test["driver"] == "slatedb-nbd":
-                stack.enter_context(
-                    slate_db_background(
-                        wal_enabled=test.get("wal_enabled"),
-                        object_store_cache=test.get("object_store_cache"),
-                    )
+            if test["driver"] == "folder":
+                stack.enter_context(push_pop_cwd(test_folder))
+
+                with bench_print("overall_test_duration"):
+                    # Run the Linux kernel source extraction benchmark
+                    bench_linux_kernel_source_extraction(bencher=bencher)
+
+                    bench_sparse(bencher=bencher)
+
+                    bench_write_big_zeroes(bencher=bencher)
+                continue
+
+            zfs = stack.enter_context(
+                zfs_on_nbd_driver(
+                    base_driver=test["driver"],
+                    **test,
                 )
-            elif test["driver"] == "zerofs":
-                # Need to pass:
-                # * wal_enabled
-                # * object_store_cache
-                stack.enter_context(zerofs_background())
-            else:
-                raise ValueError(f"Unknown driver: {test['driver']}")
+            )
 
             nbd_device_name = "device_10809" if test["driver"] == "zerofs" else None
 
@@ -204,14 +289,15 @@ def bench(
 
                 bench_write_big_zeroes(bencher=bencher)
 
-                bench_snapshot(zfs["dataset"], bencher=bencher)
+                if not disable_zfs_tests:
+                    bench_snapshot(zfs["dataset"], bencher=bencher)
 
-                # bench_trim(zfs["pool"], bencher=bencher)
+                    # bench_trim(zfs["pool"], bencher=bencher)
 
-                # Some potential issues here?
-                # bench_scrub(zfs["pool"], bencher=bencher)
+                    # Some potential issues here?
+                    # bench_scrub(zfs["pool"], bencher=bencher)
 
-                bench_sync(zfs["pool"], bencher=bencher)
+                    bench_sync(zfs["pool"], bencher=bencher)
 
             # Show how much data is used
             logger.info("Checking space usage in S3 bucket:")

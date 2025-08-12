@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 @contextmanager
 def zerofs_background(
     *, automatically_kill: bool = True, wal_enabled: bool | None = None
-) -> Iterator[subprocess.Popen]:
+) -> Iterator[None]:
     """
     Context manager to run ZeroFS in the background.
     The process is started at the start and killed at the end.
@@ -100,7 +100,7 @@ def zerofs_background(
         logger.debug("Waiting for ZeroFS to start...")
         time.sleep(30)
         logger.debug("ZeroFS started successfully.")
-        yield process  # Yield control to the block of code using this context manager
+        yield  # Yield control to the block of code using this context manager
     finally:
         logger.debug("Stopping ZeroFS...")
         # Kill the ZeroFS process
