@@ -160,6 +160,14 @@ def bench(
             )
         ),
     ] = None,
+    mcli_alias: Annotated[
+        str,
+        typer.Option(help=("Alias to use for MinIO cli operations.")),
+    ] = "truenas",
+    mcli_bucket: Annotated[
+        str,
+        typer.Option(help=("Bucket to use for MinIO cli operations.")),
+    ] = "zerofs",
 ):
     wal_enabled = [True, False] if test_wal_enabled else [None]
     object_store_cache = [True, False] if test_object_store_cache else [None]
@@ -213,7 +221,7 @@ def bench(
 
         with ExitStack() as stack:
             stack.enter_context(push_pop_cwd(os.path.dirname(__file__)))
-            stack.enter_context(empty_bucket("truenas/zerofs"))
+            stack.enter_context(empty_bucket(f"{mcli_alias}/{mcli_bucket}"))
 
             # This driver is quite different, so we handle it separately.
             if test["driver"] == "zerofs-plan9":
@@ -302,7 +310,7 @@ def bench(
             # Show how much data is used
             logger.info("Checking space usage in S3 bucket:")
             mcli = subprocess.run(
-                ["mcli", "du", "truenas/zerofs"],
+                ["mcli", "du", f"{mcli_alias}/{mcli_bucket}"],
                 stdout=subprocess.PIPE,
                 check=True,
                 encoding="utf-8",
