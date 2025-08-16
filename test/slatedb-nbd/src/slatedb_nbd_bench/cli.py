@@ -240,22 +240,7 @@ async def bench(
             abort=True,
         )
 
-    for key in (
-        "AWS_ENDPOINT",
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_BUCKET_NAME",
-    ):
-        if key not in os.environ:
-            msg = f"Missing required environment variable: {key}"
-            raise ValueError(msg)
-
-    bucket_name = os.environ["AWS_BUCKET_NAME"]
-    endpoint_url = os.environ["AWS_ENDPOINT"]
-    access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
-    secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
-
-    bucket_name = os.environ["AWS_BUCKET_NAME"]
+    config = Config.from_env()
 
     # Confirm that the bucket is going to get nuked
     if any(
@@ -264,7 +249,7 @@ async def bench(
     ):
         click.confirm(
             (
-                f"You are about to run tests that will delete the bucket {bucket_name}. "
+                f"You are about to run tests that will delete the bucket {config.bucket_name}. "
                 "Existing data in the bucket will be lost. Are you sure you want to continue?"
             ),
             abort=True,
@@ -291,13 +276,12 @@ async def bench(
             stack.enter_context(push_pop_cwd(os.path.dirname(__file__)))
             await stack.enter_async_context(
                 empty_bucket(
-                    bucket_name,
-                    endpoint_url=endpoint_url,
-                    access_key_id=access_key_id,
-                    secret_access_key=secret_access_key,
+                    bucket_name=config.bucket_name,
+                    endpoint_url=config.endpoint_url,
+                    access_key_id=config.access_key_id,
+                    secret_access_key=config.secret_access_key,
                 )
             )
-            continue
 
             # This driver is quite different, so we handle it separately.
             if test["driver"] == "zerofs-plan9":
@@ -382,17 +366,6 @@ async def bench(
                     # bench_scrub(zfs["pool"], bencher=bencher)
 
                     bench_sync(zfs["pool"], bencher=bencher)
-
-            # Show how much data is used
-            logger.info("Checking space usage in S3 bucket:")
-            mcli = subprocess.run(
-                ["mcli", "du", f"{mcli_alias}/{mcli_bucket}"],
-                stdout=subprocess.PIPE,
-                check=True,
-                encoding="utf-8",
-            )
-            print("Space usage:")
-            print(mcli.stdout, end="")
 
         results.append(
             {
