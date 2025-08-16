@@ -4,7 +4,11 @@ version = "0.1.0"
 description = "Benchmarking tool for SlateDB NBD projects"
 readme = "README.md"
 requires-python = ">=3.12.3"
-dependencies = ["httpx>=0.28.1", "typer>=0.16.0"]
+dependencies = [
+    "aioboto3>=15.0.0",
+    "httpx>=0.28.1",
+    "typer>=0.16.0",
+]
 
 [project.scripts]
 slatedb-nbd = "slatedb_nbd_bench.cli:app"
@@ -14,7 +18,10 @@ requires = ["uv_build>=0.8.5,<0.9.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
-dev = ["ruff>=0.12.7"]
+dev = [
+    "ruff>=0.12.7",
+    "types-aioboto3>=15.0.0",
+]
 
 [tool.ruff]
 target-version = "py312"
