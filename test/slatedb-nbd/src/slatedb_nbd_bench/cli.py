@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import subprocess
-from contextlib import ExitStack, contextmanager
+from contextlib import AsyncExitStack, ExitStack, contextmanager
+from dataclasses import dataclass
 from enum import Enum
-from typing import Annotated
+from functools import wraps
+from typing import TYPE_CHECKING, Annotated, Self
 
 import click
 import typer
@@ -26,6 +29,9 @@ from slatedb_nbd_bench.tests.files import (
 )
 from slatedb_nbd_bench.working_dir import push_pop_cwd
 from slatedb_nbd_bench.zfs import temporary_zfs
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine
 
 logger = logging.getLogger(__name__)
 
@@ -118,8 +124,50 @@ class ZFSSync(str, Enum):
         return self.value
 
 
+def coro[**P, R](f: Callable[P, Coroutine[None, None, R]]) -> Callable[P, R]:
+    @wraps(f)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        return asyncio.run(f(*args, **kwargs))
+
+    return wrapper
+
+
+@dataclass
+class Config:
+    bucket_name: str
+    endpoint_url: str
+    access_key_id: str
+    secret_access_key: str
+
+    @classmethod
+    def from_env(cls) -> Self:
+        d = {
+            key: os.environ.get(key)
+            for key in (
+                "AWS_ENDPOINT",
+                "AWS_ACCESS_KEY_ID",
+                "AWS_SECRET_ACCESS_KEY",
+                "AWS_BUCKET_NAME",
+            )
+        }
+
+        missing = [key for key, value in d.items() if not value]
+
+        if any(missing):
+            msg = f"Missing required environment variables: {', '.join(missing)}"
+            raise ValueError(msg)
+
+        return cls(
+            bucket_name=d["AWS_BUCKET_NAME"],  # pyright: ignore[reportArgumentType]
+            endpoint_url=d["AWS_ENDPOINT"],  # pyright: ignore[reportArgumentType]
+            access_key_id=d["AWS_ACCESS_KEY_ID"],  # pyright: ignore[reportArgumentType]
+            secret_access_key=d["AWS_SECRET_ACCESS_KEY"],  # pyright: ignore[reportArgumentType]
+        )
+
+
 @app.command()
-def bench(
+@coro
+async def bench(
     *,
     drivers: Annotated[
         list[Driver],
@@ -160,10 +208,6 @@ def bench(
             )
         ),
     ] = None,
-    mcli_alias: Annotated[
-        str,
-        typer.Option(help=("Alias to use for MinIO cli operations.")),
-    ] = "slatedb-nbd",
 ):
     wal_enabled = [True, False] if test_wal_enabled else [None]
     object_store_cache = [True, False] if test_object_store_cache else [None]
@@ -206,7 +250,12 @@ def bench(
             msg = f"Missing required environment variable: {key}"
             raise ValueError(msg)
 
-    mcli_bucket = os.environ["AWS_BUCKET_NAME"]
+    bucket_name = os.environ["AWS_BUCKET_NAME"]
+    endpoint_url = os.environ["AWS_ENDPOINT"]
+    access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
+    secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
+
+    bucket_name = os.environ["AWS_BUCKET_NAME"]
 
     # Confirm that the bucket is going to get nuked
     if any(
@@ -215,25 +264,11 @@ def bench(
     ):
         click.confirm(
             (
-                f"You are about to run tests that will delete the bucket {mcli_bucket}. "
+                f"You are about to run tests that will delete the bucket {bucket_name}. "
                 "Existing data in the bucket will be lost. Are you sure you want to continue?"
             ),
             abort=True,
         )
-
-    # Set the mcli alias based on the current environmental variables
-    subprocess.run(
-        [
-            "mcli",
-            "alias",
-            "set",
-            mcli_alias,
-            os.environ["AWS_ENDPOINT"],
-            os.environ["AWS_ACCESS_KEY_ID"],
-            os.environ["AWS_SECRET_ACCESS_KEY"],
-        ],
-        check=True,
-    )
 
     # Ask for sudo pass now. It will be needed soon
     subprocess.run(["sudo", "echo", "Thanks"], check=True, stdout=subprocess.DEVNULL)
@@ -252,9 +287,17 @@ def bench(
         print(json.dumps(test, indent=2))
         bencher = Bencher()
 
-        with ExitStack() as stack:
+        async with AsyncExitStack() as stack:
             stack.enter_context(push_pop_cwd(os.path.dirname(__file__)))
-            stack.enter_context(empty_bucket(f"{mcli_alias}/{mcli_bucket}"))
+            await stack.enter_async_context(
+                empty_bucket(
+                    bucket_name,
+                    endpoint_url=endpoint_url,
+                    access_key_id=access_key_id,
+                    secret_access_key=secret_access_key,
+                )
+            )
+            continue
 
             # This driver is quite different, so we handle it separately.
             if test["driver"] == "zerofs-plan9":
