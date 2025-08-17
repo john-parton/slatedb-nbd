@@ -49,11 +49,12 @@ app = typer.Typer(help="Command line interface for SlateDB NBD tests and benchma
 def zfs_on_nbd_driver(*, base_driver: Driver, **kwargs):
     # Start the SlateDB NBD server in the background
     with ExitStack() as stack:
-        if base_driver == Driver.slatedb_nbd:
+        if base_driver in {Driver.slatedb_nbd, Driver.slatedb_nbd_main}:
             stack.enter_context(
                 slate_db_background(
                     wal_enabled=kwargs.get("wal_enabled"),
                     object_store_cache=kwargs.get("object_store_cache"),
+                    use_working_dir=base_driver == Driver.slatedb_nbd,
                 )
             )
         elif base_driver == Driver.zerofs:
@@ -100,6 +101,7 @@ def test():
 
 class Driver(str, Enum):
     slatedb_nbd = "slatedb-nbd"
+    slatedb_nbd_main = "slatedb-nbd-main"
     zerofs = "zerofs"
     zerofs_plan9 = "zerofs-plan9"
     folder = "folder"

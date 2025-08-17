@@ -10,7 +10,9 @@ logger = logging.getLogger(__name__)
 
 @contextmanager
 def zerofs_background(
-    *, automatically_kill: bool = True, wal_enabled: bool | None = None
+    *,
+    automatically_kill: bool = True,
+    wal_enabled: bool | None = None,
 ) -> Iterator[None]:
     """
     Context manager to run ZeroFS in the background.
@@ -46,16 +48,16 @@ def zerofs_background(
     os.chdir("/tmp")
 
     # Check if 'ZeroFS' directory exists
-    if not os.path.exists("ZeroFS"):
+    if os.path.exists("ZeroFS"):
+        os.chdir("ZeroFS")
+        logger.debug("Pulling latest changes for ZeroFS repository...")
+        subprocess.run(["git", "pull"], check=True)
+    else:
         logger.debug("Cloning ZeroFS repository...")
         subprocess.run(
             ["git", "clone", "git@github.com:Barre/ZeroFS.git", "ZeroFS"], check=False
         )
         os.chdir("ZeroFS")
-    else:
-        os.chdir("ZeroFS")
-        logger.debug("Pulling latest changes for ZeroFS repository...")
-        subprocess.run(["git", "pull"], check=True)
 
     # Actual code is in a subdirectory as of https://github.com/Barre/ZeroFS/commit/c443021c0c5c63b0475ef6c8f8de495f3d395bc6
     os.chdir("zerofs")
