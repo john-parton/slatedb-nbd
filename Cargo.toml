@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+clap = { version = "4.5.45", features = ["derive", "env"] }
 object_store = { version = "0.12.3", features = ["aws", "fs"] }
 slatedb = { version = "0.7.0", features = ["wal_disable"] }
 thiserror = "2.0.12"
