@@ -104,7 +104,7 @@ async fn main() -> std::io::Result<()> {
 
     let server = NbdServerBuilder::builder()
         .devices(vec![device])
-        .host(args.host)
+        .host(&args.host)
         .maybe_port(args.port)
         .build();
     info!("Starting NBD server...");
