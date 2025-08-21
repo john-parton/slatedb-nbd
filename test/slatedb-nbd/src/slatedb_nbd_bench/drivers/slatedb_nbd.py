@@ -15,11 +15,29 @@ def slate_db_background(
     automatically_kill: bool = True,
     wal_enabled: bool | None = None,
     object_store_cache: bool | None = None,
+    use_working_dir: bool = True,
 ) -> Iterator[None]:
     """
     Context manager to run SlateDB in the background.
     The process is started at the start and killed at the end.
     """
+    # Create temporary directory, checkout main
+    if not use_working_dir:
+        # Change dir to tmp
+        os.chdir("/tmp")
+        # Clone
+        if os.path.exists("slatedb-nbd"):
+            os.chdir("slatedb-nbd")
+            logger.debug("Pulling latest changes for SlateDB-NBD repository...")
+            subprocess.run(["git", "pull"], check=True)
+        else:
+            logger.debug("Cloning SlateDB-NBD repository...")
+            subprocess.run(
+                ["git", "clone", "git@github.com:john-parton/slatedb-nbd.git"],
+                check=True,
+            )
+            os.chdir("slatedb-nbd")
+
     # Check if a process is already running
     existing_process = subprocess.run(
         ["pgrep", "-f", "^target/release/slatedb_nbd$"],

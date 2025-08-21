@@ -23,15 +23,18 @@ class _TestConfig(TypedDict):
     zfs_sync: NotRequired[str | None]
 
 
+_SLATE_DB_DEFAULTS = {
+    "encryption": True,
+    "ashift": 12,
+    "block_size": 4096,
+}
+
 DRIVER_DEFAULTS = {
     "zerofs": {
         "encryption": False,
     },
-    "slatedb-nbd": {
-        "encryption": True,
-        "ashift": 12,
-        "block_size": 4096,
-    },
+    "slatedb-nbd": _SLATE_DB_DEFAULTS,
+    "slatedb-nbd-main": _SLATE_DB_DEFAULTS,
 }
 
 
